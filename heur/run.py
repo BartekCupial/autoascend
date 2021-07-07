@@ -2,9 +2,10 @@ import contextlib
 import time
 import traceback
 
-from multiprocessing import Pool
 import aicrowd_gym
 import numpy as np
+from multiprocessing import Pool
+from nle import nethack as nh
 
 from agent import Agent
 
@@ -13,6 +14,7 @@ class EnvWrapper:
     def __init__(self, env):
         self.env = env
         self.score = 0
+        self.visualizer = None
 
     def reset(self):
         obs = self.env.reset()
@@ -20,7 +22,7 @@ class EnvWrapper:
         return obs
 
     def step(self, action):
-        obs, reward, done, info = self.env.step(self.env._actions.index(action))
+        obs, reward, done, info = self.env.step(nh.actions.ACTIONS.index(action))
         self.score += reward
         return obs, reward, done, info
 
@@ -31,13 +33,15 @@ class EnvWrapper:
         return contextlib.suppress()
 
 
-def single_game(_=None):
+def single_game(i):
     env = EnvWrapper(aicrowd_gym.make('NetHackChallenge-v0'))
     try:
         agent = Agent(env)
         agent.main()
     except BaseException as e:
         print(''.join(traceback.format_exception(None, e, e.__traceback__)))
+
+    print(f'Run {i} finished with score {env.score}')
 
     return env.score
 
@@ -47,8 +51,9 @@ if __name__ == "__main__":
     start_time = time.time()
 
     with Pool(4) as pool:
-        scores = list(pool.map(single_game, [None] * NUM_ASSESSMENTS))
+        scores = list(pool.map(single_game, range(NUM_ASSESSMENTS)))
 
+    print('scores  :', scores)
     print('duration:', time.time() - start_time)
     print('len     :', len(scores))
     print('median  :', np.median(scores))
