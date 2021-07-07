@@ -2,6 +2,7 @@ FROM nvcr.io/nvidia/pytorch:21.06-py3
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update
+RUN apt-get install -y build-essential autoconf libtool pkg-config python3-dev python3-pip python3-numpy git flex bison libbz2-dev
 
 ENV USER_NAME aicrowd
 ENV HOME_DIR /home/$USER_NAME
