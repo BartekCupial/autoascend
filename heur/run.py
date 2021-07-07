@@ -1,4 +1,5 @@
 import contextlib
+import sys
 import time
 import traceback
 
@@ -34,7 +35,12 @@ class EnvWrapper:
 
 
 def single_game(i):
-    env = EnvWrapper(aicrowd_gym.make('NetHackChallenge-v0'))
+    orig_env = aicrowd_gym.make('NetHackChallenge-v0')
+    if orig_env is None:
+        print(f'Run {i} not available')
+        return
+
+    env = EnvWrapper(orig_env)
     try:
         agent = Agent(env)
         agent.main()
@@ -46,7 +52,7 @@ def single_game(i):
     return env.score
 
 if __name__ == "__main__":
-    NUM_ASSESSMENTS = 4096
+    NUM_ASSESSMENTS = int(sys.argv[1])
 
     start_time = time.time()
 
