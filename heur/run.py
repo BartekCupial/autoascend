@@ -42,7 +42,7 @@ def single_game(i):
 
     env = EnvWrapper(orig_env)
     try:
-        agent = Agent(env)
+        agent = Agent(env, panic_on_errors=True)
         agent.main()
     except BaseException as e:
         print(''.join(traceback.format_exception(None, e, e.__traceback__)))
