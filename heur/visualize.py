@@ -7,7 +7,7 @@ from glyph import C
 
 MSG_HISTORY_COUNT = 10
 FONT_SIZE = 32
-FAST_FRAME_SKIPPING = 8
+FAST_FRAME_SKIPPING = 16
 
 
 def _put_text(img, text, pos, scale=FONT_SIZE / 35, thickness=1, color=(255, 255, 0), console=False):
@@ -267,7 +267,13 @@ class Visualizer:
         _put_text(vis, status_str, (FONT_SIZE, 0), color=status_col)
         if item.modifier is not None:
             _put_text(vis, str(item.modifier), (FONT_SIZE * 2, 0))
-        _put_text(vis, str(item), (FONT_SIZE * 4, 0))
+
+        if item.is_weapon():
+            _put_text(vis, str(self.env.agent.character.get_weapon_bonus(item)), (FONT_SIZE * 4, 0))
+
+        _put_text(vis, str(item), (FONT_SIZE * 8, 0))
+        if item.equipped:
+            _draw_frame(vis, color=(0, 255, 255), thickness=10)
         return vis
 
     def _draw_inventory(self, height):
@@ -275,7 +281,8 @@ class Visualizer:
         vis = np.zeros((height, width, 3)).astype(np.uint8)
         if self.env.agent:
             item_h = FONT_SIZE
-            for i, (letter, item) in enumerate(self.env.agent.inventory.items()):
+            for i, (letter, item) in enumerate(zip(self.env.agent.inventory.items.all_letters, \
+                                                   self.env.agent.inventory.items.all_items)):
                 vis[i * item_h:(i + 1) * item_h] = self._draw_item(letter, item, width, item_h)
         _draw_frame(vis)
         return vis

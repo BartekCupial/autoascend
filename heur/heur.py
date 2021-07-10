@@ -8,6 +8,8 @@ import termios
 import time
 import traceback
 import tty
+import warnings
+from argparse import ArgumentParser
 from collections import Counter
 from pathlib import Path
 from pprint import pprint
@@ -15,6 +17,7 @@ from pprint import pprint
 import gym
 import nle.nethack as nh
 import numpy as np
+import pandas as pd
 
 import visualize
 from agent import Agent, BLStats, G
@@ -68,13 +71,9 @@ class EnvWrapper:
             print('Steps:', self.env._steps)
             print('Turns:', self.env._turns)
             print('Seed :', self.env.get_seeds())
+            print('Items below me :', self.agent.inventory.items_below_me)
             print()
-            obj_classes = {getattr(nh, x): x[:-len('_CLASS')] for x in dir(nh) if x.endswith('_CLASS')}
-            for letter, text, cls in zip(self.last_observation['inv_letters'],
-                                         self.last_observation['inv_strs'],
-                                         self.last_observation['inv_oclasses']):
-                if (text != 0).any():
-                    print(obj_classes[cls].ljust(7), chr(letter), '->', bytes(text).decode())
+            print(self.agent.inventory.items)
             print('-' * 20)
             self.env.render()
             print('-' * 20)
@@ -237,28 +236,48 @@ class EnvWrapper:
             'steps': self.env._steps,
             'turns': self.agent.blstats.time,
             'level_num': len(self.agent.levels),
-            'character': str(self.agent.character),
+            'panic_num': len(self.agent.all_panics),
+            'character': str(self.agent.character).split()[0],
             'end_reason': self.end_reason,
             'seed': self.env.get_seeds(),
         }
 
 
-def single_simulation(seed, timeout=360, step_limit=20000):
-    start_time = time.time()
-    env = EnvWrapper(gym.make('NetHackChallenge-v0'), step_limit=step_limit)
+def prepare_env(args, seed, step_limit=None):
+    seed += args.seed
+
+    if args.role is not None:
+        while 1:
+            env = gym.make('NetHackChallenge-v0')
+            env.seed(seed, seed)
+            obs = env.reset()
+            blstats = BLStats(*obs['blstats'])
+            character_glyph = obs['glyphs'][blstats.y, blstats.x]
+            if nh.permonst(nh.glyph_to_mon(character_glyph)).mname.startswith(args.role):
+                break
+            seed += 10 ** 9
+
+    env = EnvWrapper(gym.make('NetHackChallenge-v0', no_progress_timeout=200),
+                     skip_to=args.skip_to, visualizer=args.mode == 'run')
     env.env.seed(seed, seed)
-    agent = Agent(env, verbose=False)
+    return env
+
+
+def single_simulation(args, seed, timeout=180):
+    start_time = time.time()
+    env = prepare_env(args, seed)
+    agent = Agent(env, verbose=False, panic_on_errors=args.panic_on_errors)
     env.set_agent(agent)
 
     if timeout is not None:
         pool = multiprocessing.pool.ThreadPool(processes=1)
     try:
         if timeout is not None:
-            pool.apply_async(agent.main).get(60)
+            pool.apply_async(agent.main).get(timeout)
         else:
             agent.main()
     except multiprocessing.context.TimeoutError:
-        env.end_reason = 'timeout'
+        env.end_reason = f'timeout'
     except BaseException as e:
         env.end_reason = f'exception: {"".join(traceback.format_exception(None, e, e.__traceback__))}'
         print(f'Seed {seed}, step {env.step_count}:', env.end_reason)
@@ -269,31 +288,25 @@ def single_simulation(seed, timeout=360, step_limit=20000):
     return summary
 
 
-def run_single_interactive_game(seed, skip_to):
+def run_single_interactive_game(args):
     termios.tcgetattr(sys.stdin)
     tty.setcbreak(sys.stdin.fileno())
     try:
-        env = EnvWrapper(gym.make('NetHackChallenge-v0'), skip_to=skip_to, visualizer=True)
-        env.env.seed(seed, seed)
-
-        agent = Agent(env, verbose=True)
-        env.set_agent(agent)
-
-        agent.main()
-
+        summary = single_simulation(args, 0, timeout=None)
+        pprint(summary)
     finally:
         os.system('stty sane')
 
 
-def run_profiling(games):
+def run_profiling(args):
     import cProfile, pstats
     pr = cProfile.Profile()
 
     start_time = time.time()
     pr.enable()
     res = []
-    for i in range(games):
-        res.append(single_simulation(i, timeout=None))
+    for i in range(args.episodes):
+        res.append(single_simulation(args, i, timeout=None))
     pr.disable()
 
     duration = time.time() - start_time
@@ -304,15 +317,15 @@ def run_profiling(games):
     stats.print_stats(20)
     stats.dump_stats('/tmp/nethack_stats.profile')
 
-    print('turns_per_second:', sum([r['turns'] for r in res]) / duration)
-    print('steps_per_second:', sum([r['steps'] for r in res]) / duration)
-    print('games_per_hour  :', len(res) / duration * 3600)
+    print('turns_per_second :', sum([r['turns'] for r in res]) / duration)
+    print('steps_per_second :', sum([r['steps'] for r in res]) / duration)
+    print('episodes_per_hour:', len(res) / duration * 3600)
 
     subprocess.run('gprof2dot -f pstats /tmp/nethack_stats.profile -o /tmp/calling_graph.dot'.split())
     subprocess.run('xdot /tmp/calling_graph.dot'.split())
 
 
-def run_simulations(games, first_seed):
+def run_simulations(args):
     from multiprocessing import Process, Queue
     from matplotlib import pyplot as plt
     import seaborn as sns
@@ -320,13 +333,14 @@ def run_simulations(games, first_seed):
     result_queue = Queue()
 
     def single_simulation_add_result_to_queue(seed):
-        r = single_simulation(seed)
+        r = single_simulation(args, seed)
         result_queue.put(r)
 
     start_time = time.time()
     plot_queue = Queue()
 
     def plot_thread_func():
+        warnings.filterwarnings('ignore')
         fig = plt.figure()
         plt.show(block=False)
         while 1:
@@ -385,25 +399,25 @@ def run_simulations(games, first_seed):
     plt_process = Process(target=plot_thread_func)
     plt_process.start()
     all_res = {}
-    last_seed = first_seed
+    last_seed = 0
     simulation_processes = []
-    remaining_games = games
-    for _ in range(min(16, remaining_games)):
+    remaining_episodes = args.episodes
+    for _ in range(min(16, remaining_episodes)):
         simulation_processes.append(Process(target=single_simulation_add_result_to_queue, args=(last_seed,)))
         simulation_processes[-1].start()
         last_seed += 1
-        remaining_games -= 1
+        remaining_episodes -= 1
 
     count = 0
-    while count < games:
+    while count < args.episodes:
         simulation_processes = [p for p in simulation_processes if p.is_alive() or (p.close() and False)]
         single_res = result_queue.get()
 
-        if remaining_games:
+        if remaining_episodes:
             simulation_processes.append(Process(target=single_simulation_add_result_to_queue, args=(last_seed,)))
             simulation_processes[-1].start()
             last_seed += 1
-            remaining_games -= 1
+            remaining_episodes -= 1
 
         if not all_res:
             all_res = {key: [] for key in single_res}
@@ -427,6 +441,8 @@ def run_simulations(games, first_seed):
         text.append(f'time_per_turn                 : {np.sum(all_res["duration"]) / np.sum(all_res["turns"])}')
         text.append(f'turns_per_second              : {np.sum(all_res["turns"]) / np.sum(all_res["duration"])}')
         text.append(f'turns_per_second(multithread) : {np.sum(all_res["turns"]) / total_duration}')
+        text.append(f'panic_num_per_game(median)    : {np.median(all_res["panic_num"])}')
+        text.append(f'panic_num_per_game(mean)      : {np.sum(all_res["panic_num"]) / count}')
         text.append(f'score_median                  : {np.median(all_res["score"]):.1f} +/- '
                     f'{np.std([np.median(np.random.choice(all_res["score"], size=max(1, len(all_res["score"]) // 2))) for _ in range(1024)]):.1f}')
         text.append(f'score_mean                    : {np.mean(all_res["score"]):.1f} +/- '
@@ -450,18 +466,33 @@ def run_simulations(games, first_seed):
     print('DONE!')
 
 
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument('mode', choices=('simulate', 'run', 'profile'))
+    parser.add_argument('--seed', type=int)
+    parser.add_argument('--skip-to', type=int, default=0)
+    parser.add_argument('-n', '--episodes', type=int, default=1)
+    parser.add_argument('--role', choices=('arc', 'bar', 'cav', 'hea', 'kni',
+                                           'mon', 'pri', 'ran', 'rog', 'sam',
+                                           'tou', 'val', 'wiz'))
+    parser.add_argument('--panic-on-errors', action='store_true')
+
+    args = parser.parse_args()
+    if args.seed is None:
+        args.seed = np.random.randint(0, 2**30)
+
+    print('ARGS:', args)
+    return args
+
+
 def main():
-    if sys.argv[1] == 'simulate':
-        games = int(sys.argv[2])
-        seed = int(sys.argv[3])
-        run_simulations(games, seed)
-    elif sys.argv[1] == 'profile':
-        games = int(sys.argv[2])
-        run_profiling(games)
-    elif sys.argv[1] == 'single':
-        seed = int(sys.argv[2])
-        skip_to = int(sys.argv[3])
-        run_single_interactive_game(seed, skip_to)
+    args = parse_args()
+    if args.mode == 'simulate':
+        run_simulations(args)
+    elif args.mode == 'profile':
+        run_profiling(args)
+    elif args.mode == 'run':
+        run_single_interactive_game(args)
 
 
 if __name__ == '__main__':
