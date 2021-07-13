@@ -40,12 +40,15 @@ def single_game(i):
         print(f'Run {i} not available')
         return
 
-    env = EnvWrapper(orig_env)
     try:
-        agent = Agent(env, panic_on_errors=True)
-        agent.main()
-    except BaseException as e:
-        print(''.join(traceback.format_exception(None, e, e.__traceback__)))
+        env = EnvWrapper(orig_env)
+        try:
+            agent = Agent(env, panic_on_errors=True)
+            agent.main()
+        except BaseException as e:
+            print(''.join(traceback.format_exception(None, e, e.__traceback__)))
+    finally:
+        orig_env.close()
 
     print(f'Run {i} finished with score {env.score}')
 
