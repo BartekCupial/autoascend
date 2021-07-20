@@ -1,23 +1,20 @@
+from functools import partial, wraps
 from itertools import chain
 
 import numba as nb
 import numpy as np
 import toolz
-from functools import partial, wraps
 
 from strategy import Strategy
 
 
 @nb.njit(cache=True)
-def bfs(y, x, *, walkable, walkable_diagonally):
-    SIZE_X = 79  # C.SIZE_X
-    SIZE_Y = 21  # C.SIZE_Y
-
-    dis = np.zeros((SIZE_Y, SIZE_X), dtype=np.int32)
+def bfs(y, x, *, walkable, walkable_diagonally, can_squeeze):
+    dis = np.zeros(walkable.shape, dtype=np.int32)
     dis[:] = -1
     dis[y, x] = 0
 
-    buf = np.zeros((SIZE_Y * SIZE_X, 2), dtype=np.uint32)
+    buf = np.zeros((walkable.shape[0] * walkable.shape[1], 2), dtype=np.uint32)
     index = 0
     buf[index] = (y, x)
     size = 1
@@ -25,18 +22,14 @@ def bfs(y, x, *, walkable, walkable_diagonally):
         y, x = buf[index]
         index += 1
 
-        # TODO: handle situations
-        # dir: SE
-        # @|
-        # -.
-        # TODO: debug diagonal moving into and from doors
         for dy in [-1, 0, 1]:
             for dx in [-1, 0, 1]:
                 py, px = y + dy, x + dx
-                if 0 <= py < SIZE_Y and 0 <= px < SIZE_X and (dy != 0 or dx != 0):
+                if 0 <= py < walkable.shape[0] and 0 <= px < walkable.shape[1] and (dy != 0 or dx != 0):
                     if (walkable[py, px] and
-                            (abs(dy) + abs(dx) <= 1 or (walkable_diagonally[py, px] and walkable_diagonally[y, x] and
-                                                        (walkable[py, x] or walkable[y, px])))):
+                            (abs(dy) + abs(dx) <= 1 or
+                             (walkable_diagonally[py, px] and walkable_diagonally[y, x] and
+                              (can_squeeze or walkable[py, x] or walkable[y, px])))):
                         if dis[py, px] == -1:
                             dis[py, px] = dis[y, x] + 1
                             buf[size] = (py, px)
@@ -89,11 +82,32 @@ def debug_log(txt, fun, color=(255, 255, 255)):
                             assert 0
                         except StopIteration as e:
                             return e.value
+
                 ret.strategy = partial(f, ret.strategy)
             return ret
 
     return wrapper
 
 
+def adjacent(p1, p2):
+    return max(abs(p1[0] - p2[0]), abs(p1[1] - p2[1])) == 1
+
+
 def calc_dps(to_hit, damage):
     return damage * np.clip((to_hit - 1), 0, 20) / 20
+
+@Strategy.wrap
+def assert_strategy(error=None):
+    yield True
+    assert 0, error
+
+def copy_result(func):
+    @wraps(func)
+    def f(*args, **kwargs):
+        ret = func(*args, **kwargs)
+        if isinstance(ret, list):
+            return ret.copy()
+        if isinstance(ret, tuple):
+            return tuple((x.copy() if isinstance(x, list) else x for x in ret))
+        return ret.copy()
+    return f

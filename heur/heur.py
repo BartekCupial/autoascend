@@ -1,9 +1,13 @@
+import atexit
 import contextlib
+import gc
 import json
-import multiprocessing.pool
+import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 import traceback
@@ -11,32 +15,96 @@ import tty
 import warnings
 from argparse import ArgumentParser
 from collections import Counter
+from multiprocessing import Process, Queue
+from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from pprint import pprint
 
 import gym
 import nle.nethack as nh
 import numpy as np
-import pandas as pd
 
+import agent as agent_lib
 import visualize
-from agent import Agent, BLStats, G
-from glyph import ALL
+
+
+def fork_with_nethack_env(env):
+    tmpdir = tempfile.mkdtemp(prefix='nlecopy_')
+    shutil.copytree(env.env._vardir, tmpdir, dirs_exist_ok=True)
+    env.env._tempdir = None  # it has to be done before the fork to avoid removing the same directory two times
+    gc.collect()
+
+    pid = os.fork()
+
+    env.env._tempdir = tempfile.TemporaryDirectory(prefix='nlefork_')
+    shutil.copytree(tmpdir, env.env._tempdir.name, dirs_exist_ok=True)
+    env.env._vardir = env.env._tempdir.name
+    os.chdir(env.env._vardir)
+    return pid
+
+
+def reload_agent(base_path=str(Path(__file__).parent.absolute())):
+    global visualize, agent_lib
+    visualize = agent_lib = None
+    modules_to_remove = []
+    for k, m in sys.modules.items():
+        if hasattr(m, '__file__') and m.__file__ and m.__file__.startswith(base_path):
+            modules_to_remove.append(k)
+    del m
+
+    gc.collect()
+    while modules_to_remove:
+        for k in modules_to_remove:
+            assert sys.getrefcount(sys.modules[k]) >= 2
+            if sys.getrefcount(sys.modules[k]) == 2:
+                sys.modules.pop(k)
+                modules_to_remove.remove(k)
+                gc.collect()
+                break
+        else:
+            assert 0, ('cannot unload agent library',
+                       {k: sys.getrefcount(sys.modules[k]) for k in modules_to_remove})
+
+    import agent as agent_lib
+    import visualize
+
+
+class ReloadAgent(KeyboardInterrupt):
+    # it inherits from KeyboardInterrupt as the agent doesn't catch that exception
+    pass
 
 
 class EnvWrapper:
-    def __init__(self, env, skip_to=0, visualizer=False, step_limit=None):
+    def __init__(self, env, to_skip=0, visualizer_args=dict(), step_limit=None, agent_args={}, interactive=False):
         self.env = env
-        self.skip_to = skip_to
+        self.agent_args = agent_args
+        self.interactive = interactive
+        self.to_skip = to_skip
         self.step_limit = step_limit
         self.visualizer = None
-        if visualizer:
-            self.visualizer = visualize.Visualizer(self)
+        if visualizer_args['enable']:
+            visualizer_args.pop('enable')
+            self.visualizer = visualize.Visualizer(self, **visualizer_args)
         self.last_observation = None
         self.agent = None
 
         self.draw_walkable = False
         self.draw_seen = False
+
+    def main(self):
+        self.reset()
+        while 1:
+            try:
+                self.agent = agent_lib.Agent(self, **self.agent_args)
+                self.agent.main()
+                break
+            except ReloadAgent:
+                pass
+            finally:
+                self.render()
+
+            self.agent = None
+            reload_agent()
 
     def set_agent(self, agent):
         self.agent = agent
@@ -47,24 +115,75 @@ class EnvWrapper:
         self.step_count = 0
         self.end_reason = ''
         self.last_observation = obs
-        self.render()
 
-        G.assert_map(obs['glyphs'], obs['chars'])
+        if self.agent is not None:
+            self.render()
 
-        blstats = BLStats(*obs['blstats'])
+        agent_lib.G.assert_map(obs['glyphs'], obs['chars'])
+
+        blstats = agent_lib.BLStats(*obs['blstats'])
         assert obs['chars'][blstats.y, blstats.x] == ord('@')
-
 
         return obs
 
-    def render(self):
+    def fork(self):
+        fork_again = True
+        while fork_again:
+            if (pid := fork_with_nethack_env(self.env)) != 0:
+                # parent
+                print('freezing parent')
+                while 1:
+                    try:
+                        os.waitpid(pid, 0)
+                        break
+                    except KeyboardInterrupt:
+                        pass
+                self.visualizer.force_next_frame()
+                self.visualizer.render()
+                while 1:
+                    try:
+                        fork_again = input('fork again [yn]: ')
+                        if fork_again == 'y':
+                            fork_again = True
+                            break
+                        elif fork_again == 'n':
+                            fork_again = False
+                            break
+                    except KeyboardInterrupt:
+                        pass
+
+                termios.tcgetattr(sys.stdin)
+                tty.setcbreak(sys.stdin.fileno())
+            else:
+                # child
+                atexit.unregister(multiprocessing.util._exit_function)
+                self.visualizer.force_next_frame()
+                self.visualizer.render()
+                break
+
+    def render(self, force=False):
         if self.visualizer is not None:
+            with self.debug_tiles(self.agent.current_level().walkable, color=(0, 255, 0, 128)) \
+                    if self.draw_walkable else contextlib.suppress():
+                with self.debug_tiles(~self.agent.current_level().seen, color=(255, 0, 0, 128)) \
+                        if self.draw_seen else contextlib.suppress():
+                    with self.debug_tiles((self.last_observation['specials'] & nh.MG_OBJPILE) > 0,
+                                          color=(0, 255, 255, 128)):
+                        self.visualizer.step(self.last_observation)
+                        if force:
+                            self.visualizer.force_next_frame()
+                        rendered = self.visualizer.render()
+
+            if not force and (not self.interactive or not rendered):
+                return
+
             if self.agent is not None:
                 print('Message:', self.agent.message)
                 print('Pop-up :', self.agent.popup)
             print()
-            print(BLStats(*self.last_observation['blstats']))
-            if self.agent is not None:
+            if self.agent is not None and hasattr(self.agent, 'blstats'):
+                print(agent_lib.BLStats(*self.last_observation['blstats']))
+                print(f'Carrying: {self.agent.inventory.items.total_weight} / {self.agent.character.carrying_capacity}')
                 print('Character:', self.agent.character)
             print('Misc :', self.last_observation['misc'])
             print('Score:', self.score)
@@ -75,16 +194,10 @@ class EnvWrapper:
             print()
             print(self.agent.inventory.items)
             print('-' * 20)
+
             self.env.render()
             print('-' * 20)
             print()
-            with self.debug_tiles(self.agent.current_level().walkable, color=(0, 255, 0, 128)) \
-                    if self.draw_walkable else contextlib.suppress():
-                with self.debug_tiles(~self.agent.current_level().seen, color=(255, 0, 0, 128)) \
-                        if self.draw_seen else contextlib.suppress():
-                    with self.debug_tiles((self.last_observation['specials'] & nh.MG_OBJPILE) > 0, color=(0, 255, 255, 128)):
-                        self.visualizer.step(self.last_observation)
-                        self.visualizer.render()
 
     def print_help(self):
         scene_glyphs = set(self.env.last_observation[0].reshape(-1))
@@ -107,25 +220,25 @@ class EnvWrapper:
                 desc = f': {obj_classes[oclass]}: "{appearance}"'
 
             desc2 = 'Labels: '
-            if i in G.INV_DICT:
-                desc2 += ','.join(G.INV_DICT[i])
+            if i in agent_lib.G.INV_DICT:
+                desc2 += ','.join(agent_lib.G.INV_DICT[i])
 
             if i in scene_glyphs:
                 pos = (self.env.last_observation[0].reshape(-1) == i).nonzero()[0]
                 count = len(pos)
                 pos = pos[0]
                 char = bytes([self.env.last_observation[1].reshape(-1)[pos]])
-                texts.append((-count, f'{" " if i in G.INV_DICT else "U"} Glyph {i:4d} -> '
+                texts.append((-count, f'{" " if i in agent_lib.G.INV_DICT else "U"} Glyph {i:4d} -> '
                                       f'Char: {char} Count: {count:4d} '
                                       f'Type: {cls.replace("_OFF", ""):11s} {desc:30s} '
-                                      f'{ALL.find(i) if ALL.find(i) is not None else "":20} '
+                                      f'{agent_lib.ALL.find(i) if agent_lib.ALL.find(i) is not None else "":20} '
                                       f'{desc2}'))
         for _, t in sorted(texts):
             print(t)
 
     def get_action(self):
         while 1:
-            key = os.read(sys.stdin.fileno(), 3)
+            key = os.read(sys.stdin.fileno(), 5)
 
             if key == b'\x1bOP':  # F1
                 self.draw_walkable = not self.draw_walkable
@@ -136,6 +249,16 @@ class EnvWrapper:
                 self.render()
                 continue
 
+            if key == b'\x1bOS':  # F4
+                raise ReloadAgent()
+
+            if key == b'\x1b[15~':  # F5
+                self.fork()
+                continue
+
+            elif key == b'\x1b[3~':  # Delete
+                self.to_skip = 16
+                return None
 
             if len(key) != 1:
                 print('wrong key', key)
@@ -163,26 +286,27 @@ class EnvWrapper:
         if self.visualizer is not None:
             self.render()
 
-            print()
-            print('agent_action:', agent_action, repr(chr(int(agent_action))))
-            print()
+            if self.interactive:
+                print()
+                print('agent_action:', agent_action, repr(chr(int(agent_action))))
+                print()
 
-            if self.step_count < self.skip_to:
-                self.visualizer.frame_skipping = visualize.FAST_FRAME_SKIPPING
+            if self.to_skip > 0:
+                self.to_skip -= 1
+                if self.interactive and self.to_skip == 0:
+                    self.visualizer.force_next_frame()
                 action = None
             else:
-                old_frame_skipping = self.visualizer.frame_skipping
-                self.visualizer.frame_skipping = 1
-                if old_frame_skipping > 1:
-                    self.render()
+                self.visualizer.force_next_frame()
+                self.render()
                 action = self.get_action()
 
             if action is None:
                 action = agent_action
 
-            print('\n' * 10)
-            print('action:', action)
-            print()
+            if self.interactive:
+                print('action:', action)
+                print()
         else:
             action = agent_action
 
@@ -190,7 +314,7 @@ class EnvWrapper:
         self.score += reward
         self.step_count += 1
         # if not done:
-        #     G.assert_map(obs['glyphs'], obs['chars'])
+        #     agent_lib.G.assert_map(obs['glyphs'], obs['chars'])
 
         if done:
             end_reason = bytes(obs['tty_chars'].reshape(-1)).decode().replace('You made the top ten list!', '').split()
@@ -215,6 +339,7 @@ class EnvWrapper:
         if done:
             if self.visualizer is not None:
                 self.render()
+            if self.interactive:
                 print('Summary:')
                 pprint(self.get_summary())
 
@@ -251,40 +376,55 @@ def prepare_env(args, seed, step_limit=None):
             env = gym.make('NetHackChallenge-v0')
             env.seed(seed, seed)
             obs = env.reset()
-            blstats = BLStats(*obs['blstats'])
+            blstats = agent_lib.BLStats(*obs['blstats'])
             character_glyph = obs['glyphs'][blstats.y, blstats.x]
             if nh.permonst(nh.glyph_to_mon(character_glyph)).mname.startswith(args.role):
                 break
             seed += 10 ** 9
+            env.close()
 
+    if args.visualize_ends is not None:
+        assert args.mode == 'simulate'
+        args.skip_to = 2 ** 32
+    visualizer_args = dict(enable=args.mode == 'run' or args.visualize_ends is not None,
+                           start_visualize=args.visualize_ends[seed] if args.visualize_ends is not None else None,
+                           show=args.mode == 'run',
+                           output_dir=Path('/workspace/vis/') / str(seed),
+                           frame_skipping=None if args.visualize_ends is None else 1)
     env = EnvWrapper(gym.make('NetHackChallenge-v0', no_progress_timeout=200),
-                     skip_to=args.skip_to, visualizer=args.mode == 'run')
+                     to_skip=args.skip_to, visualizer_args=visualizer_args,
+                     agent_args=dict(panic_on_errors=args.panic_on_errors,
+                                     verbose=args.mode == 'run'),
+                     interactive=args.mode == 'run')
     env.env.seed(seed, seed)
     return env
 
 
-def single_simulation(args, seed, timeout=180):
+def single_simulation(args, seed_offset, timeout=360):
     start_time = time.time()
-    env = prepare_env(args, seed)
-    agent = Agent(env, verbose=False, panic_on_errors=args.panic_on_errors)
-    env.set_agent(agent)
+    env = prepare_env(args, seed_offset)
 
     if timeout is not None:
-        pool = multiprocessing.pool.ThreadPool(processes=1)
+        pool = ThreadPool(processes=1)
     try:
         if timeout is not None:
-            pool.apply_async(agent.main).get(timeout)
+            pool.apply_async(env.main).get(timeout)
         else:
-            agent.main()
+            env.main()
     except multiprocessing.context.TimeoutError:
         env.end_reason = f'timeout'
     except BaseException as e:
         env.end_reason = f'exception: {"".join(traceback.format_exception(None, e, e.__traceback__))}'
-        print(f'Seed {seed}, step {env.step_count}:', env.end_reason)
+        print(f'Seed {env.env.get_seeds()}, step {env.step_count}:', env.end_reason)
 
     end_time = time.time()
     summary = env.get_summary()
     summary['duration'] = end_time - start_time
+
+    if args.visualize_ends is not None:
+        env.visualizer.save_end_history()
+
+    env.env.close()
     return summary
 
 
@@ -299,48 +439,107 @@ def run_single_interactive_game(args):
 
 
 def run_profiling(args):
-    import cProfile, pstats
-    pr = cProfile.Profile()
+    if args.profiler == 'cProfile':
+        import cProfile, pstats
+    elif args.profiler == 'pyinstrument':
+        from pyinstrument import Profiler
+    else:
+        assert 0
+
+    if args.profiler == 'cProfile':
+        pr = cProfile.Profile()
+    elif args.profiler == 'pyinstrument':
+        profiler = Profiler()
+    else:
+        assert 0
+
+    if args.profiler == 'cProfile':
+        pr.enable()
+    elif args.profiler == 'pyinstrument':
+        profiler.start()
+    else:
+        assert 0
 
     start_time = time.time()
-    pr.enable()
     res = []
     for i in range(args.episodes):
+        print(f'starting {i + 1} game...')
         res.append(single_simulation(args, i, timeout=None))
-    pr.disable()
-
     duration = time.time() - start_time
 
-    stats = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE)
-    stats.print_stats(30)
-    stats = pstats.Stats(pr).sort_stats(pstats.SortKey.TIME)
-    stats.print_stats(20)
-    stats.dump_stats('/tmp/nethack_stats.profile')
 
+    if args.profiler == 'cProfile':
+        pr.disable()
+    elif args.profiler == 'pyinstrument':
+        session = profiler.stop()
+    else:
+        assert 0
+
+    print()
     print('turns_per_second :', sum([r['turns'] for r in res]) / duration)
     print('steps_per_second :', sum([r['steps'] for r in res]) / duration)
     print('episodes_per_hour:', len(res) / duration * 3600)
+    print()
 
-    subprocess.run('gprof2dot -f pstats /tmp/nethack_stats.profile -o /tmp/calling_graph.dot'.split())
-    subprocess.run('xdot /tmp/calling_graph.dot'.split())
+    if args.profiler == 'cProfile':
+        stats = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE)
+        stats.print_stats(30)
+        stats = pstats.Stats(pr).sort_stats(pstats.SortKey.TIME)
+        stats.print_stats(30)
+        stats.dump_stats('/tmp/nethack_stats.profile')
+
+        subprocess.run('gprof2dot -f pstats /tmp/nethack_stats.profile -o /tmp/calling_graph.dot'.split())
+        subprocess.run('xdot /tmp/calling_graph.dot'.split())
+    elif args.profiler == 'pyinstrument':
+        frame_records = session.frame_records
+
+        new_records = []
+        for record in frame_records:
+            ret_frames = []
+            for frame in record[0][1:][::-1]:
+                func, module, line = frame.split('\0')
+                if func in ['f', 'run']:
+                    continue
+                ret_frames.append(frame)
+                if module.endswith('agent.py') and func in ['step', 'preempt', 'call_update_functions']:
+                    break
+            ret_frames.append(record[0][0])
+            new_records.append((ret_frames[::-1], record[1] / session.duration * 100))
+        session.frame_records = new_records
+        session.start_call_stack = [session.start_call_stack[0]]
+
+        print('Cumulative time:')
+        profiler.last_session = session
+        print(profiler.output_text(unicode=True, color=True))
+
+        new_records = []
+        for record in frame_records:
+            new_records.append([record[0][1:][-1:], record[1] / session.duration * 100])
+            new_records[-1][0] = record[0][:1] + new_records[-1][0]
+        session.frame_records = new_records
+        session.start_call_stack = [session.start_call_stack[0]]
+
+        print('Total time:')
+        profiler.last_session = session
+        print(profiler.output_text(unicode=True, color=True, show_all=True))
+    else:
+        assert 0
 
 
 def run_simulations(args):
-    from multiprocessing import Process, Queue
-    from matplotlib import pyplot as plt
-    import seaborn as sns
-    sns.set()
-    result_queue = Queue()
-
-    def single_simulation_add_result_to_queue(seed):
-        r = single_simulation(args, seed)
-        result_queue.put(r)
+    import ray
+    ray.init(address='auto')
 
     start_time = time.time()
     plot_queue = Queue()
 
     def plot_thread_func():
+        from matplotlib import pyplot as plt
+        import seaborn as sns
+
         warnings.filterwarnings('ignore')
+        sns.set()
+
         fig = plt.figure()
         plt.show(block=False)
         while 1:
@@ -368,7 +567,8 @@ def run_simulations(args):
                     if k == 'level_num':
                         bins = [b + 0.5 for b in range(max(res[k]) + 1)]
                     else:
-                        bins = np.quantile(res[k], np.linspace(0, 1, min(len(res[k]) // (20 + len(res[k]) // 50) + 2, 50)))
+                        bins = np.quantile(res[k],
+                                           np.linspace(0, 1, min(len(res[k]) // (20 + len(res[k]) // 50) + 2, 50)))
                     sns.histplot(res[k], bins=bins, kde=np.var(res[k]) > 1e-6, stat='density', ax=ax)
 
             ax = fig.add_subplot(spec[:len(histogram_keys) // 2, 1])
@@ -396,28 +596,35 @@ def run_simulations(args):
             fig.tight_layout()
             plt.show(block=False)
 
-    plt_process = Process(target=plot_thread_func)
-    plt_process.start()
+    if not args.no_plot:
+        plt_process = Process(target=plot_thread_func)
+        plt_process.start()
+
     all_res = {}
-    last_seed = 0
-    simulation_processes = []
-    remaining_episodes = args.episodes
-    for _ in range(min(16, remaining_episodes)):
-        simulation_processes.append(Process(target=single_simulation_add_result_to_queue, args=(last_seed,)))
-        simulation_processes[-1].start()
-        last_seed += 1
-        remaining_episodes -= 1
+    refs = []
+
+    @ray.remote
+    def remote_simulation(args, seed_offset):
+        # I think there is some nondeterminism in nle environment when playing
+        # multiple episodes (maybe bones?). That should do the trick
+        q = Queue()
+
+        def sim():
+            q.put(single_simulation(args, seed_offset))
+
+        p = Process(target=sim)
+        p.start()
+        p.join()
+        return q.get()
+
+    for seed_offset in range(args.episodes):
+        if args.visualize_ends is None or seed_offset in args.visualize_ends:
+            refs.append(remote_simulation.remote(args, seed_offset))
 
     count = 0
-    while count < args.episodes:
-        simulation_processes = [p for p in simulation_processes if p.is_alive() or (p.close() and False)]
-        single_res = result_queue.get()
-
-        if remaining_episodes:
-            simulation_processes.append(Process(target=single_simulation_add_result_to_queue, args=(last_seed,)))
-            simulation_processes[-1].start()
-            last_seed += 1
-            remaining_episodes -= 1
+    for handle in refs:
+        ref, refs = ray.wait(refs, num_returns=1, timeout=None)
+        single_res = ray.get(ref[0])
 
         if not all_res:
             all_res = {key: [] for key in single_res}
@@ -427,43 +634,46 @@ def run_simulations(args):
         for k, v in single_res.items():
             all_res[k].append(v if not hasattr(v, 'item') else v.item())
 
-        if not result_queue.empty():
-            continue
-
         plot_queue.put(all_res)
 
         total_duration = time.time() - start_time
+
+        median_score_std = np.std([np.median(np.random.choice(all_res["score"],
+                                                              size=max(1, len(all_res["score"]) // 2)))
+                                   for _ in range(1024)])
 
         text = []
         text.append(f'count                         : {count}')
         text.append(f'time_per_simulation           : {np.mean(all_res["duration"])}')
         text.append(f'simulations_per_hour          : {3600 / np.mean(all_res["duration"])}')
+        text.append(f'simulations_per_hour(multi)   : {3600 * count / total_duration}')
         text.append(f'time_per_turn                 : {np.sum(all_res["duration"]) / np.sum(all_res["turns"])}')
         text.append(f'turns_per_second              : {np.sum(all_res["turns"]) / np.sum(all_res["duration"])}')
-        text.append(f'turns_per_second(multithread) : {np.sum(all_res["turns"]) / total_duration}')
+        text.append(f'turns_per_second(multi)       : {np.sum(all_res["turns"]) / total_duration}')
         text.append(f'panic_num_per_game(median)    : {np.median(all_res["panic_num"])}')
         text.append(f'panic_num_per_game(mean)      : {np.sum(all_res["panic_num"]) / count}')
         text.append(f'score_median                  : {np.median(all_res["score"]):.1f} +/- '
-                    f'{np.std([np.median(np.random.choice(all_res["score"], size=max(1, len(all_res["score"]) // 2))) for _ in range(1024)]):.1f}')
+                    f'{median_score_std:.1f}')
         text.append(f'score_mean                    : {np.mean(all_res["score"]):.1f} +/- '
                     f'{np.std(all_res["score"]) / (len(all_res["score"]) ** 0.5):.1f}')
         text.append(f'score_05-95                   : {np.quantile(all_res["score"], 0.05)} '
                     f'{np.quantile(all_res["score"], 0.95)}')
         text.append(f'score_25-75                   : {np.quantile(all_res["score"], 0.25)} '
                     f'{np.quantile(all_res["score"], 0.75)}')
-        text.append(f'exceptions                    : {sum([r.startswith("exception:") for r in all_res["end_reason"]])}')
-        text.append(f'steplimit                     : {sum([r.startswith("steplimit") or r.startswith("ABORT") for r in all_res["end_reason"]])}')
-        text.append(f'timeout                       : {sum([r.startswith("timeout") for r in all_res["end_reason"]])}')
+        text.append(f'exceptions                    : '
+                    f'{sum([r.startswith("exception:") for r in all_res["end_reason"]])}')
+        text.append(f'steplimit                     : '
+                    f'{sum([r.startswith("steplimit") or r.startswith("ABORT") for r in all_res["end_reason"]])}')
+        text.append(f'timeout                       : '
+                    f'{sum([r.startswith("timeout") for r in all_res["end_reason"]])}')
         print('\n'.join(text) + '\n')
 
-        with Path('/tmp/nh_sim.json').open('w') as f:
-            json.dump(all_res, f)
-
-    for p in simulation_processes:
-        p.join()
-        p.close()
+        if args.visualize_ends is None:
+            with Path('/tmp/nh_sim.json').open('w') as f:
+                json.dump(all_res, f)
 
     print('DONE!')
+    ray.shutdown()
 
 
 def parse_args():
@@ -476,10 +686,18 @@ def parse_args():
                                            'mon', 'pri', 'ran', 'rog', 'sam',
                                            'tou', 'val', 'wiz'))
     parser.add_argument('--panic-on-errors', action='store_true')
+    parser.add_argument('--no-plot', action='store_true')
+    parser.add_argument('--visualize-ends', type=Path, default=None,
+                        help='Path to json file with dict: seed -> visualization_start_step')
+    parser.add_argument('--profiler', choices=('cProfile', 'pyinstrument'), default='pyinstrument')
 
     args = parser.parse_args()
     if args.seed is None:
-        args.seed = np.random.randint(0, 2**30)
+        args.seed = np.random.randint(0, 2 ** 30)
+
+    if args.visualize_ends is not None:
+        with args.visualize_ends.open('r') as f:
+            args.visualize_ends = {int(k): int(v) for k, v in json.load(f).items()}
 
     print('ARGS:', args)
     return args

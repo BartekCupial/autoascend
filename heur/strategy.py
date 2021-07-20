@@ -1,4 +1,4 @@
-from functools import wraps
+from functools import wraps, partial
 
 
 class Strategy:
@@ -6,18 +6,30 @@ class Strategy:
     def wrap(cls, func):
         return lambda *a, **k: Strategy(wraps(func)(lambda: func(*a, **k)))
 
-    def __init__(self, strategy):
+    def __init__(self, strategy, config=None):
         self.strategy = strategy
+        if config is None:
+            self.config = str(self.strategy)
+        else:
+            self.config = config
 
-    def run(self, agent=None):
+    def run(self, return_condition=False):
         gen = self.strategy()
         if not next(gen):
+            if return_condition:
+                return False
             return None
         try:
             next(gen)
             assert 0
         except StopIteration as e:
+            if return_condition:
+                return True
             return e.value
+
+    def check_condition(self):
+        gen = self.strategy()
+        return next(gen)
 
     def condition(self, condition):
         def f(self=self, condition=condition):
@@ -32,7 +44,19 @@ class Strategy:
             except StopIteration as e:
                 return e.value
 
-        return Strategy(f)
+        return Strategy(f, {'strategy': self.config, 'condition': str(condition)})
+
+    def until(self, agent, condition):
+        def f():
+            if not condition():
+                yield False
+                assert 0
+            yield True
+
+        strategy = self.condition(lambda: not condition()) \
+                       .preempt(agent, [Strategy(f)], continue_after_preemption=False)
+        strategy.config = {'strategy': self.config, 'until': str(condition)}
+        return strategy
 
     def before(self, strategy):
         def f(self=self, strategy=strategy):
@@ -66,9 +90,9 @@ class Strategy:
 
             return (r1, r2)
 
-        return Strategy(f)
+        return Strategy(f, {'1': self.config, '2': strategy.config})
 
-    def preempt(self, agent, strategies):
+    def preempt(self, agent, strategies, continue_after_preemption=True):
         def f(self=self, agent=agent, strategies=strategies):
             gen = self.strategy()
             condition_passed = False
@@ -81,9 +105,16 @@ class Strategy:
 
             assert not agent._no_step_calls
 
-            return agent.preempt(strategies, self)
+            def f2():
+                try:
+                    next(gen)
+                    assert 0
+                except StopIteration as e:
+                    return e.value
 
-        return Strategy(f)
+            return agent.preempt(strategies, self, first_func=f2, continue_after_preemption=continue_after_preemption)
+
+        return Strategy(f, {'strategy': self.config, 'preempt': [s.config for s in strategies]})
 
     def repeat(self):
         def f(self=self):
@@ -107,4 +138,25 @@ class Strategy:
                     val = e.value
             return val
 
-        return Strategy(f)
+        return Strategy(f, {'repeat': self.config})
+
+    def every(self, num_of_iterations):
+        current_num = -1
+        def f():
+            nonlocal current_num
+            current_num += 1
+            if current_num % num_of_iterations != 0:
+                yield False
+                assert 0
+            it = self.strategy()
+            yield next(it)
+            try:
+                next(it)
+                assert 0
+            except StopIteration as e:
+                return e.value
+
+        return Strategy(f, {'strategy': self.config, 'every': num_of_iterations})
+
+    def __repr__(self):
+        return str(self.config)

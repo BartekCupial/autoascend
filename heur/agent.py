@@ -7,77 +7,19 @@ import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
-import objects
 import utils
 from character import Character
 from exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
-from glyph import SS, MON, C
-from item import Item, Inventory
+from exploration_logic import ExplorationLogic
+from global_logic import GlobalLogic
+from glyph import MON, C, Hunger, G
+from item import Inventory, Item
+from level import Level
+from monster_tracker import MonsterTracker
 from strategy import Strategy
 
 BLStats = namedtuple('BLStats',
                      'x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number')
-
-
-class G:  # Glyphs
-    FLOOR: ['.'] = {SS.S_room, SS.S_ndoor, SS.S_darkroom}
-    STONE: [' '] = {SS.S_stone}
-    WALL: ['|', '-'] = {SS.S_vwall, SS.S_hwall, SS.S_tlcorn, SS.S_trcorn, SS.S_blcorn, SS.S_brcorn,
-                        SS.S_crwall, SS.S_tuwall, SS.S_tdwall, SS.S_tlwall, SS.S_trwall}
-    CORRIDOR: ['#'] = {SS.S_corr}
-    STAIR_UP: ['<'] = {SS.S_upstair}
-    STAIR_DOWN: ['>'] = {SS.S_dnstair}
-
-    DOOR_CLOSED: ['+'] = {SS.S_vcdoor, SS.S_hcdoor}
-    DOOR_OPENED: ['-', '|'] = {SS.S_vodoor, SS.S_hodoor}
-    DOORS = set.union(DOOR_CLOSED, DOOR_OPENED)
-
-    BARS = {SS.S_bars}
-
-    MONS = set(MON.ALL_MONS)
-    PETS = set(MON.ALL_PETS)
-
-    PEACEFUL_MONS = {i + nh.GLYPH_MON_OFF for i in range(nh.NUMMONS) if nh.permonst(i).mflags2 & MON.M2_PEACEFUL}
-
-    BODIES = {nh.GLYPH_BODY_OFF + i for i in range(nh.NUMMONS)}
-    OBJECTS = {nh.GLYPH_OBJ_OFF + i for i in range(nh.NUM_OBJECTS) if ord(nh.objclass(i).oc_class) != nh.ROCK_CLASS}
-    BOULDER = {nh.GLYPH_OBJ_OFF + i for i in range(nh.NUM_OBJECTS) if ord(nh.objclass(i).oc_class) == nh.ROCK_CLASS}
-
-    NORMAL_OBJECTS = {i for i in range(nh.MAX_GLYPH) if nh.glyph_is_normal_object(i)}
-    FOOD_OBJECTS = {i for i in NORMAL_OBJECTS if ord(nh.objclass(nh.glyph_to_obj(i)).oc_class) == nh.FOOD_CLASS}
-
-    DICT = {k: v for k, v in locals().items() if not k.startswith('_')}
-
-    @classmethod
-    def assert_map(cls, glyphs, chars):
-        for glyph, char in zip(glyphs.reshape(-1), chars.reshape(-1)):
-            char = bytes([char]).decode()
-            for k, v in cls.__annotations__.items():
-                assert glyph not in cls.DICT[k] or char in v, f'{k} {v} {glyph} {char}'
-
-
-G.INV_DICT = {i: [k for k, v in G.DICT.items() if i in v]
-              for i in set.union(*map(set, G.DICT.values()))}
-
-
-class Hunger:
-    SATIATED = 0
-    NOT_HUNGRY = 1
-    HUNGRY = 2
-    WEAK = 3
-    FAINTING = 4
-
-
-class Level:
-    def __init__(self):
-        self.walkable = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
-        self.seen = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
-        self.objects = np.zeros((C.SIZE_Y, C.SIZE_X), np.int16)
-        self.objects[:] = -1
-        self.search_count = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
-        self.corpse_age = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32) - 10000
-        self.shop = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
-        self.checked_item_pile = np.zeros((C.SIZE_Y, C.SIZE_X), bool)
 
 
 class Agent:
@@ -94,20 +36,28 @@ class Agent:
         self.step_count = 0
         self.message = ''
         self.popup = []
+        self._message_history = []
 
         self.inventory = Inventory(self)
         self.character = Character(self)
+        self.exploration = ExplorationLogic(self)
+        self.global_logic = GlobalLogic(self)
+        self.monster_tracker = MonsterTracker(self)
 
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
         self._previous_glyphs = None
+        self._last_turn = -1
+        self._inactivity_counter = 0
+        self._is_updating_state = False
 
         self._no_step_calls = False
 
         self.turns_in_atom_operation = None
 
         self._is_reading_message_or_popup = False
+        self._last_terrain_check = None
 
     ######## CONVENIENCE FUNCTIONS
 
@@ -158,13 +108,13 @@ class Agent:
 
     @contextlib.contextmanager
     def add_on_update(self, funcs):
-       self.on_update.extend(funcs)
+        self.on_update.extend(funcs)
 
-       try:
-           yield
-       finally:
-           for f in funcs:
-               self.on_update.pop(self.on_update.index(f))
+        try:
+            yield
+        finally:
+            for f in funcs:
+                self.on_update.pop(self.on_update.index(f))
 
     @contextlib.contextmanager
     def context_preempt(self, conditions):
@@ -200,47 +150,53 @@ class Agent:
                 raise
             outcome = ids.index(i)
         finally:
-            self.on_update = list(filter(lambda f: f not in id2fun.values(), self.on_update))
+            for f in id2fun.values():
+                self.on_update.pop(self.on_update.index(f))
 
         # check if less nested ChangeStategy is present
         self.call_update_functions()
 
-    def preempt(self, strategies, default):
+    def preempt(self, strategies, func, first_func=None, continue_after_preemption=True):
         id2fun = {}
         for strategy in strategies:
-            def f(iden, strategy=strategy):
+            def f(iden, strategy):
                 it = strategy.strategy()
                 if next(it):
                     raise AgentChangeStrategy(iden, it)
 
-            fun = partial(f, id(f))
-            assert id(f) not in id2fun
-            id2fun[id(f)] = fun
+            iden = (id(f), id(strategy))
+            fun = partial(f, iden, strategy)
+            assert iden not in id2fun
+            id2fun[iden] = fun
 
-        inactivity_counter = 0
-        last_step = 0
+        last_turn = 0
 
         call_update = True
 
+        val = None
+
+        last_step = self.step_count
+        inactivity_counter = 0
+        is_first = True
         while 1:
-            assert inactivity_counter < 100
-            if last_step != self.step_count:
+            inactivity_counter += 1
+            if self.step_count != last_step:
                 last_step = self.step_count
                 inactivity_counter = 0
-            else:
-                inactivity_counter += 1
+            assert inactivity_counter < 5, 'cyclic preempt'
 
             iterator = None
             try:
                 with self.add_on_update(list(id2fun.values())):
                     if call_update:
                         call_update = False
-                        self.call_update_functions()
+                        self.call_update_functions(list(id2fun.values()))
 
-                    if isinstance(default, Strategy):
-                        val = default.run()
+                    f = (first_func or func) if is_first else func
+                    if isinstance(f, Strategy):
+                        val = f.run()
                     else:
-                        val = default()
+                        val = f()
                     break
 
             except AgentChangeStrategy as e:
@@ -255,6 +211,11 @@ class Agent:
                     assert 0, iterator
                 except StopIteration:
                     pass
+
+                if not continue_after_preemption:
+                    break
+
+            is_first = False
 
         return val
 
@@ -283,6 +244,9 @@ class Agent:
                     j = line.find(res[0])
                     result, marker_type = (i, j), res[0]
                     break
+
+            if result is not None and result[1] == 1:
+                result = (result[0], 0)  # e.g. for known items view
             return result, marker_type
 
         message = bytes(obs['message']).decode().replace('\0', ' ').replace('\n', '').strip()
@@ -316,8 +280,10 @@ class Agent:
                 pref += line.strip()
 
                 # I'm not sure when the new line character in broken messages should be a space and when be ignored.
-                # '#' character occasionally occurs at the beginning of the broken line and isn't in the message.
-                if pref.replace(' ', '').replace('#', '') == message.replace(' ', '').replace('#', ''):
+                # '#' character (and others) occasionally occurs at the beginning of the broken line and isn't in
+                # the message. Sometimes the message on the screen lacks last '.'.
+                replace_func = lambda x: ''.join((c for c in x if c.isalnum()))
+                if replace_func(pref) == replace_func(message):
                     break
             else:
                 if marker_pos[0] == 0:
@@ -325,9 +291,6 @@ class Agent:
                     elems2 = [s for s in pref.split() if s]
                     assert len(elems1) < len(elems2) and elems2[-len(elems1):] == elems1, (elems1, elems2)
                     return message_preffix + pref, popup, False
-                if self.env.visualizer is not None:
-                    self.env.visualizer.frame_skipping = 1
-                    self.env.render()
                 raise ValueError(f"Message:\n{repr(message)}\ndoesn't match the screen:\n{repr(pref)}")
 
         # cut out popup
@@ -378,9 +341,16 @@ class Agent:
             self._is_reading_message_or_popup = True
             self.step(A.TextCharacters.SPACE)
             return
+
         self._is_reading_message_or_popup = False
+        self._message_history.append(self.message)
 
         if observation['misc'][1]:  # entering text
+            self.step(A.Command.ESC)
+            return
+
+        if 'Where do you want to be teleported?' in self.message:
+            # TODO: teleport control
             self.step(A.Command.ESC)
             return
 
@@ -402,56 +372,99 @@ class Agent:
         self.blstats = BLStats(*self.last_observation['blstats'])
         self.glyphs = self.last_observation['glyphs']
 
+        self._inactivity_counter += 1
+        if self._last_turn != self.blstats.time:
+            self._last_turn = self.blstats.time
+            self._inactivity_counter = 0
+        assert self._inactivity_counter < 100, ('turn inactivity', sorted(set(self._message_history[-50:])))
+
         if should_update:
             self.update_state()
 
     def update_state(self):
-        self.inventory.update()
-        self.update_level()
-        self.call_update_functions()
+        if self._is_updating_state:
+            return
+        self._is_updating_state = True
 
-    def call_update_functions(self):
+        try:
+            # functions that are allowed to call state unchanging steps
+            self.inventory.update()
+            self.monster_tracker.update()
+            self.check_terrain(force=False)
+            self.update_level()
+
+            self.call_update_functions()
+        finally:
+            self._is_updating_state = False
+
+    def call_update_functions(self, funcs=None):
+        if funcs is None:
+            funcs = self.on_update
+        assert all((func in self.on_update for func in funcs))
+
         with self.disallow_step_calling():
-            for func in self.on_update:
+            for func in funcs:
                 func()
 
     def update_level(self):
+        # this function shouldn't rely self.message and self.popup (because some update functions
+        # can call a few steps and change it)
+
         level = self.current_level()
 
-        if '(for sale,' in self.message:
-            level.shop[self.blstats.y, self.blstats.x] = 1
+        level.shop[self.blstats.y, self.blstats.x] = \
+                any((item.shop_status != Item.NOT_SHOP for item in self.inventory.items_below_me))
 
         if self._previous_glyphs is None or (self._previous_glyphs != self.last_observation['glyphs']).any():
             self._previous_glyphs = self.last_observation['glyphs']
 
-            # TODO: all statues
-            mask = utils.isin(self.glyphs, G.FLOOR, G.CORRIDOR, G.STAIR_UP, G.STAIR_DOWN, G.DOOR_OPENED)
+            mask = utils.isin(self.glyphs, G.FLOOR, G.CORRIDOR, G.STAIR_UP, G.STAIR_DOWN, G.DOOR_OPENED, G.TRAPS,
+                              G.ALTAR, G.FOUNTAIN)
             level.walkable[mask] = True
             level.seen[mask] = True
             level.objects[mask] = self.glyphs[mask]
+
+            mask = utils.isin(self.glyphs, G.MONS, G.PETS, G.BODIES, G.OBJECTS, G.STATUES)
+            level.seen[mask] = True
+            level.walkable[mask & ~utils.isin(level.objects, G.STONE)] = True
 
             mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS)
             level.seen[mask] = True
             level.objects[mask] = self.glyphs[mask]
             level.walkable[mask] = False
 
-            mask = utils.isin(self.glyphs, G.MONS, G.PETS, G.BODIES, G.OBJECTS)
-            level.seen[mask] = True
-            level.objects[mask & ~level.walkable] = -1
-            level.walkable[mask] = True
+            ignore_mask = utils.isin(self.glyphs, G.MONS, G.PETS)  # TODO: effects, etc
+            item_mask = np.vectorize(len)(level.items) != 0
+            mask = item_mask & ~ignore_mask
+            level.item_disagreement_counter[~mask] = 0
+            for y, x in zip(*mask.nonzero()):
+                if (len(level.items[y, x]) >= 2) == ((self.last_observation['specials'][y, x] & nh.MG_OBJPILE) > 0):
+                    glyphs = np.unique([glyph for item in level.items[y, x] for glyph in item.display_glyphs()])
+                    if self.glyphs[y, x] in glyphs:
+                        level.item_disagreement_counter[y, x] = 0
+                        continue
+
+                level.item_disagreement_counter[y, x] += 1
+                if level.item_disagreement_counter[y, x] > 3:
+                    level.item_disagreement_counter[y, x] = 0
+                    level.items[y, x] = ()
+
+        level.items[self.blstats.y, self.blstats.x] = self.inventory.items_below_me
+
+        level.was_on[self.blstats.y, self.blstats.x] = True
 
         for y, x in self.neighbors(self.blstats.y, self.blstats.x, shuffle=False):
             if self.glyphs[y, x] in G.STONE:
                 level.seen[y, x] = True
                 level.objects[y, x] = self.glyphs[y, x]
-                level.walkable[y, x] = False # necessary for the exit route from vaults
+                level.walkable[y, x] = False  # necessary for the exit route from vaults
 
     ######## TRIVIAL HELPERS
 
     def current_level(self):
         key = (self.blstats.dungeon_number, self.blstats.level_number)
         if key not in self.levels:
-            self.levels[key] = Level()
+            self.levels[key] = Level(*key)
         return self.levels[key]
 
     @staticmethod
@@ -475,14 +488,20 @@ class Agent:
 
     ######## TRIVIAL ACTIONS
 
-    def wield_best_weapon(self):
+    def check_terrain(self, force):
+        if force or self._last_terrain_check is None or self.blstats.time - self._last_terrain_check > 50:
+            self._last_terrain_check = self.blstats.time
+            with self.atom_operation():
+                self.type_text('#te')
+                self.step(A.MiscAction.MORE, iter('b'))
+                self.update_level()
+                self.step(A.Command.ESC)
+
+    def wield_best_melee_weapon(self):
         # TODO: move to inventory
-        item = self.inventory.get_best_weapon()
-        if item is None:
-            return False
-        if not item.equipped:
-            self.inventory.wield(item)
-            return True
+        item = self.inventory.get_best_melee_weapon()
+        if item != self.inventory.items.main_hand:
+            return self.inventory.wield(item)
         return False
 
     def type_text(self, text):
@@ -493,6 +512,9 @@ class Agent:
     def eat(self):  # TODO: eat what
         with self.atom_operation():
             self.step(A.Command.EAT)
+            if ' eat it? [ynq]' in self.message or \
+                    ' eat one? [ynq]' in self.message:
+                self.type_text('y')
             if "You don't have anything to eat." in self.message:
                 return False
             self.type_text('y')
@@ -513,11 +535,12 @@ class Agent:
 
     def fight(self, y, x=None):
         with self.panic_if_position_changes():
-            assert self.glyphs[y, x] in G.MONS
+            assert self.glyphs[y, x] in G.MONS.union([nh.GLYPH_INVISIBLE])
             self.direction(y, x)
         return True
 
     def fire(self, item, direction):
+        # TODO: throwing is not possible if you don't have hands
         with self.atom_operation():
             self.step(A.Command.THROW)
             self.type_text(self.inventory.items.get_letter(item))
@@ -534,7 +557,9 @@ class Agent:
         with self.panic_if_position_changes():
             self.step(A.Command.SEARCH)
             self.current_level().search_count[self.blstats.y, self.blstats.x] += 1
-            return True
+            if 'You find ' in self.message:
+                self.check_terrain(force=True)
+        return True
 
     def direction(self, y, x=None):
         if x is not None:
@@ -563,11 +588,29 @@ class Agent:
         expected_y = self.blstats.y + ('s' in dir) - ('n' in dir)
         expected_x = self.blstats.x + ('e' in dir) - ('w' in dir)
 
-        self.direction(dir)
+        if (expected_y != self.blstats.y or expected_x != self.blstats.x) \
+                and self.glyphs[expected_y, expected_x] in MON.ALL_MONS:
+            # TODO: consider handling it in different way, since this situation is sometimes expected
+            raise AgentPanic(f'Monster on a next tile when moving: ({expected_y},{expected_x})')
 
-        if self.blstats.y != expected_y or self.blstats.x != expected_x:
-            raise AgentPanic(f'agent position do not match after "move": '
-                             f'expected ({expected_y}, {expected_x}), got ({self.blstats.y}, {self.blstats.x})')
+        # TODO: portals
+        if dir in ['<', '>']:
+            level = self.current_level()
+            with self.atom_operation():
+                self.direction(dir)
+                assert self.current_level().key() != level.key(), self.message
+                level.stair_destination[expected_y, expected_x] = \
+                    (self.current_level().key(), (self.blstats.y, self.blstats.x))
+                # TODO: one way portals (elemental and astral planes)
+                self.current_level().stair_destination[
+                    (self.blstats.y, self.blstats.x)] = (level.key(), (expected_y, expected_x))
+
+        else:
+            self.direction(dir)
+
+            if self.blstats.y != expected_y or self.blstats.x != expected_x:
+                raise AgentPanic(f'agent position do not match after "move": '
+                                 f'expected ({expected_y}, {expected_x}), got ({self.blstats.y}, {self.blstats.x})')
 
     ######## NON-TRIVIAL HELPERS
 
@@ -601,11 +644,22 @@ class Agent:
 
         level = self.current_level()
 
-        walkable = level.walkable & ~utils.isin(self.glyphs, G.PEACEFUL_MONS, G.BOULDER)
+        walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
+                   ~self.monster_tracker.peaceful_monster_mask & \
+                   ~utils.isin(level.objects, G.TRAPS)
+
+        for my, mx in list(zip(*np.nonzero(utils.isin(self.glyphs, G.MONS)))):
+            mon = MON.permonst(self.glyphs[my][mx])
+            import fight_heur
+            if mon.mname in fight_heur.ONLY_RANGED_SLOW_MONSTERS:
+                walkable[my, mx] = False
 
         dis = utils.bfs(y, x,
                         walkable=walkable,
-                        walkable_diagonally=walkable & ~utils.isin(level.objects, G.DOORS) & (level.objects != -1))
+                        walkable_diagonally=walkable & ~utils.isin(level.objects, G.DOORS) & (level.objects != -1),
+                        can_squeeze=self.inventory.items.total_weight <= 600 and \
+                                    self.current_level().dungeon_number != Level.SOKOBAN,
+                        )
 
         if y == self.blstats.y and x == self.blstats.x:
             self.last_bfs_dis = dis
@@ -644,10 +698,24 @@ class Agent:
 
     ######## NON-TRIVIAL ACTIONS
 
-    def go_to(self, y, x, stop_one_before=False, max_steps=None, debug_tiles_args=None):
+    def go_to(self, y, x, stop_one_before=False, max_steps=None, debug_tiles_args=None, callback=lambda: False):
         assert not stop_one_before or (self.blstats.y != y or self.blstats.x != x)
+
+        if stop_one_before and self.bfs()[y, x] == -1:
+            dis = self.bfs()
+            best_p = None
+            for ny, nx in self.neighbors(y, x):
+                if dis[ny, nx] != -1 and (best_p is None or dis[best_p] > dis[ny, nx]):
+                    best_p = ny, nx
+            if best_p is None:
+                assert 0, 'no achievable neighbor'
+            y, x = best_p
+            stop_one_before = False
+
         assert self.bfs()[y, x] != -1
 
+        if callback():
+            return
         steps_taken = 0
         cont = True
         while cont:
@@ -662,13 +730,15 @@ class Agent:
                 if stop_one_before:
                     path = path[:-1]
                 for y, x in path:
-                    if self.glyphs[y, x] in G.PEACEFUL_MONS:
+                    if self.monster_tracker.peaceful_monster_mask[y, x]:
                         cont = True
                         break
                     if not self.current_level().walkable[y, x]:
                         cont = True
                         break
                     self.move(y, x)
+                    if callback():
+                        return
                     steps_taken += 1
                     if max_steps is not None and steps_taken >= max_steps:
                         cont = False
@@ -681,27 +751,21 @@ class Agent:
     @utils.debug_log('ranged_stance1')
     def ranged_stance1(self):
         while True:
-            launchers = [i for i in self.inventory.items if i.is_launcher()]
-            ammo_list = [i for i in self.inventory.items if i.is_fired_projectile()]
-
-            valid_combinations = []
-            for launcher in launchers:
-                for ammo in ammo_list:
-                    if ammo.is_fired_projectile(launcher):
-                        valid_combinations.append((launcher, ammo))
+            valid_combinations = self.inventory.get_ranged_combinations(throwing=False)
 
             # TODO: select best combination
             if not valid_combinations:
-                self.wield_best_weapon()
+                self.wield_best_melee_weapon()
                 return False
 
             # TODO: consider using monster information to select the best combination
             launcher, ammo = valid_combinations[0]
             if not launcher.equipped:
-                self.inventory.wield(launcher)
+                if not self.inventory.wield(launcher):
+                    return False
                 continue
 
-            for _, y, x, _ in self.get_visible_monsters():
+            for _, y, x, _, _ in self.get_visible_monsters():
                 if (self.blstats.y == y or self.blstats.x == x or abs(self.blstats.y - y) == abs(self.blstats.x - x)):
                     # TODO: don't shoot pet !
                     # TODO: limited range
@@ -716,15 +780,165 @@ class Agent:
         """ Returns list of tuples (distance, y, x, monster)
         """
         dis = self.bfs()
-        mask = utils.isin(self.glyphs, G.MONS - G.PEACEFUL_MONS)
-        mask[self.blstats.y, self.blstats.x] = 0
-        mask &= dis != -1
-        # mask &= dis == dis[mask].min()
+        mask = self.monster_tracker.monster_mask & ~self.monster_tracker.peaceful_monster_mask
+        # mask &= dis != -1
         ret = []
         for y, x in zip(*mask.nonzero()):
-            ret.append((dis[y][x], y, x, nh.glyph_to_mon(self.glyphs[y][x])))
+            if (dis[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2] != -1).any():
+                if self.glyphs[y][x] == nh.GLYPH_INVISIBLE:
+                    if utils.adjacent((self.blstats.y, self.blstats.x), (y, x)):
+                        class dummy_permonst:
+                            mname='unknown'
+                        ret.append((dis[y][x], y, x, dummy_permonst(), self.glyphs[y][x]))
+                else:
+                    ret.append((dis[y][x], y, x, MON.permonst(self.glyphs[y][x]), self.glyphs[y][x]))
         ret.sort()
         return ret
+
+    def should_keep_distance(self, monsters):
+        ret = np.zeros(len(monsters), dtype=bool)
+        for i, (dis, y, x, mon, _) in enumerate(monsters):
+            if max(abs(x - self.blstats.x), abs(y - self.blstats.y)) not in (1, 2):
+                continue
+            # if mon.mname == 'goblin':
+            #     ret[i] = True
+            if self.blstats.hitpoints <= 8:
+                ret[i] = True
+        return ret
+
+    @utils.debug_log('keep_distance')
+    def keep_distance(self, monsters, keep_distance):
+        if not keep_distance.any():
+            return False
+        monsters = [m for m, k in zip(monsters, keep_distance) if k]
+        bad_tiles = ~self.current_level().walkable
+        for _, y, x, _, _ in monsters:
+            for y1 in (y - 1, y, y + 1):
+                for x1 in (x - 1, x, x + 1):
+                    if 0 <= y1 <= bad_tiles.shape[0] and 0 <= x1 <= bad_tiles.shape[1]:
+                        bad_tiles[y1, x1] = True
+
+        with self.env.debug_tiles(bad_tiles, color=(255, 0, 0, 64)):
+            for y1 in (y - 1, y, y + 1):
+                for x1 in (x - 1, x, x + 1):
+                    if 0 <= y1 <= bad_tiles.shape[0] and 0 <= x1 <= bad_tiles.shape[1]:
+                        if not bad_tiles[y1][x1]:
+                            with self.env.debug_tiles([[y1, x1]], color=(0, 255, 0, 64)):
+                                self.move(y1, x1)
+                            return True
+
+        return False
+
+    @utils.debug_log('fight2')
+    @Strategy.wrap
+    def fight2(self):
+        import fight_heur
+        yielded = False
+        wait_counter = 0
+        while 1:
+            monsters = self.get_visible_monsters()
+
+            only_ranged_slow_monsters = all([mon.mname in fight_heur.ONLY_RANGED_SLOW_MONSTERS
+                                             for _, _, _, mon, _ in monsters])
+
+            dis = self.bfs()
+
+            if not monsters or all(dis > 7 for dis, *_ in monsters) or \
+                    (only_ranged_slow_monsters and not self.inventory.get_ranged_combinations() and np.sum(dis != -1) > 1):
+                if wait_counter:
+                    self.search()
+                    wait_counter -= 1
+                    continue
+                if not yielded:
+                    yield False
+                return
+
+            if not yielded:
+                yielded = True
+                yield True
+                self.character.parse_enhance_view()
+
+            priority, actions = fight_heur.build_priority_map(self)
+            mask = ~np.isnan(priority)
+            assert mask.any()
+            priority[~mask] = np.min(priority[mask]) - 1
+
+            adjacent = dis == 1
+
+            assert np.sum(adjacent) <= 8, np.sum(adjacent)
+            possible_move_to = []
+            if adjacent.any():
+                possible_move_to = list(zip(*np.nonzero((priority == np.max(priority[adjacent])) & adjacent)))
+            assert len(possible_move_to) <= 8
+
+            best_y, best_x = None, None
+            if possible_move_to:
+                best_y, best_x = possible_move_to[self.rng.randint(0, len(possible_move_to))]
+                if priority[best_y, best_x] < -2 ** 15:
+                    best_y, best_x = None, None
+
+            best_move_score = None
+            if best_y is not None:
+                best_move_score = priority[best_y, best_x]
+            best_action = max(actions) if actions else None
+
+            if best_y is None and best_action is None:
+                assert 0, 'No possible action available during fight2'
+
+            priority[~mask] = float('nan')
+            with self.env.debug_tiles(priority, color='turbo', is_heatmap=True):
+                actions_str = '|'.join([f'{a[0]}-{a[1][0]}-{a[2]},{a[3]}' for a in sorted(actions)])
+                with self.env.debug_log(actions_str + f'|{best_move_score}|' + '|'.join(map(str, possible_move_to))):
+                    wait_counter = self._fight2_perform_action(best_action, best_move_score, best_x, best_y,
+                                                               wait_counter)
+
+    def _fight2_perform_action(self, best_action, best_move_score, best_x, best_y, wait_counter):
+        if best_action is None or (best_y is not None and best_move_score > best_action[0]):
+            with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
+                                       [best_y, best_x]], color=(0, 255, 0), is_path=True):
+                self.move(best_y, best_x)
+                wait_counter = 5
+                return wait_counter
+        else:
+            _, action_name, target_y, target_x, monster = best_action
+            if action_name == 'melee':
+                if self.wield_best_melee_weapon():
+                    return wait_counter
+                with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
+                                           [target_y, target_x]], color=(255, 0, 255), is_path=True):
+                    try:
+                        self.fight(target_y, target_x)
+                    finally:
+                        self._track_hunted_corpse(monster, target_x, target_y)
+                    wait_counter = 0
+                    return wait_counter
+            elif action_name == 'ranged':
+                launcher, ammo = self.inventory.get_best_ranged_set()
+                assert ammo is not None
+                # if ammo is None:
+                #     assert len(self.inventory.get_ranged_combinations()) == 0
+                #     self.wield_best_melee_weapon()
+                #     return wait_counter
+                if launcher is not None and not launcher.equipped:
+                    if self.inventory.wield(launcher):
+                        return wait_counter
+                with self.env.debug_tiles([[target_y, target_x]], (0, 0, 255, 255), mode='frame'):
+                    dir = self.calc_direction(self.blstats.y, self.blstats.x, target_y, target_x,
+                                              allow_nonunit_distance=True)
+                    try:
+                        self.fire(ammo, dir)
+                    finally:
+                        self._track_hunted_corpse(monster, target_x, target_y)
+                    return wait_counter
+            else:
+                raise NotImplementedError()
+        return wait_counter
+
+    def _track_hunted_corpse(self, monster, target_x, target_y):
+        _, _, _, _, mon_glyph = monster
+        if nh.glyph_is_body(self.glyphs[target_y, target_x]) \
+                and self.glyphs[target_y, target_x] - nh.GLYPH_BODY_OFF == nh.glyph_to_mon(mon_glyph):
+            self.current_level().corpse_age[target_y, target_x] = self.blstats.time
 
     @utils.debug_log('fight1')
     @Strategy.wrap
@@ -736,7 +950,7 @@ class Agent:
             # get only monsters with path to them
             monsters = [m for m in monsters if m[0] != -1]
 
-            if not monsters:
+            if not monsters or all(dis > 7 for dis, *_ in monsters):
                 if not yielded:
                     yield False
                 return
@@ -747,13 +961,16 @@ class Agent:
                 self.character.parse_enhance_view()
 
             assert len(monsters) > 0
-            dis, y, x, mon = monsters[0]
+            dis, y, x, _, mon_glyph = monsters[0]
 
             def is_monster_next_to_me():
                 monsters = self.get_visible_monsters()
                 if not monsters:
                     return False
-                return True
+                for _, y, x, _, _ in monsters:
+                    if utils.adjacent((y, x), (self.blstats.y, self.blstats.x)):
+                        return True
+                return False
 
             with self.context_preempt([
                 is_monster_next_to_me,
@@ -761,6 +978,13 @@ class Agent:
                 if outcome() is None:
                     if self.ranged_stance1():
                         continue
+
+            keep_distance = self.should_keep_distance(monsters)
+            if self.keep_distance(monsters, keep_distance):
+                continue
+            # else:
+            #     if self.emergency_strategy().run(return_condition=True):
+            #         continue
 
             # TODO: why is this possible
             if self.bfs()[y, x] == -1:
@@ -780,12 +1004,13 @@ class Agent:
                            debug_tiles_args=dict(color=(255, 0, 0), is_path=True))
                 continue
 
-            if self.wield_best_weapon():
+            if self.wield_best_melee_weapon():
                 continue
             try:
                 self.fight(y, x)
             finally:  # TODO: what if panic?
-                if nh.glyph_is_body(self.glyphs[y, x]) and self.glyphs[y, x] - nh.GLYPH_BODY_OFF == mon:
+                if nh.glyph_is_body(self.glyphs[y, x]) \
+                        and self.glyphs[y, x] - nh.GLYPH_BODY_OFF == nh.glyph_to_mon(mon_glyph):
                     self.current_level().corpse_age[y, x] = self.blstats.time
 
     @utils.debug_log('eat1')
@@ -798,7 +1023,9 @@ class Agent:
         else:
             flags = MON.M1_ACID | MON.M1_POIS
         editable_bodies = [b for b in G.BODIES if MON.permonst(b).mflags1 & flags == 0]
-        mask = utils.isin(self.glyphs, editable_bodies) & (self.blstats.time - level.corpse_age <= 50)
+        mask = utils.isin(self.glyphs, editable_bodies) & \
+               ((self.blstats.time - level.corpse_age <= 50) |
+                utils.isin(self.glyphs, [MON.body_from_name('lizard'), MON.body_from_name('lichen')]))
         mask |= utils.isin(self.glyphs, G.FOOD_OBJECTS)
         mask &= ~level.shop
         if not mask.any():
@@ -816,175 +1043,9 @@ class Agent:
         closests_y, closests_x = mask.nonzero()
         target_y, target_x = closests_y[0], closests_x[0]
 
-        path = self.path(self.blstats.y, self.blstats.x, target_y, target_x)
-
         self.go_to(target_y, target_x, debug_tiles_args=dict(color=(255, 255, 0), is_path=True))
         if not self.current_level().shop[self.blstats.y, self.blstats.x]:
             self.eat()  # TODO: what
-
-    @utils.debug_log('explore1')
-    def explore1(self, search_prio_limit=0):
-        # TODO: refactor entire function
-
-        def open_neighbor_doors():
-            for py, px in self.neighbors(self.blstats.y, self.blstats.x, diagonal=False):
-                if self.glyphs[py, px] in G.DOOR_CLOSED:
-                    with self.panic_if_position_changes():
-                        if not self.open_door(py, px):
-                            if not 'locked' in self.message:
-                                for _ in range(6):
-                                    if self.open_door(py, px):
-                                        break
-                                else:
-                                    while self.glyphs[py, px] in G.DOOR_CLOSED:
-                                        self.kick(py, px)
-                            else:
-                                while self.glyphs[py, px] in G.DOOR_CLOSED:
-                                    self.kick(py, px)
-                    break
-
-        def to_visit_func():
-            level = self.current_level()
-            to_visit = np.zeros((C.SIZE_Y, C.SIZE_X), dtype=bool)
-            dis = self.bfs()
-            for dy in [-1, 0, 1]:
-                for dx in [-1, 0, 1]:
-                    if dy != 0 or dx != 0:
-                        to_visit |= utils.translate(~level.seen & utils.isin(self.glyphs, G.STONE), dy, dx)
-                        if dx == 0 or dy == 0:
-                            to_visit |= utils.translate(utils.isin(self.glyphs, G.DOOR_CLOSED), dy, dx)
-            return to_visit
-
-        def to_search_func(prio_limit=0, return_prio=False):
-            level = self.current_level()
-            dis = self.bfs()
-
-            prio = np.zeros((C.SIZE_Y, C.SIZE_X), np.float32)
-            prio[:] = -1
-            prio -= level.search_count ** 2 * 2
-            is_on_corridor = utils.isin(level.objects, G.CORRIDOR)
-            is_on_door = utils.isin(level.objects, G.DOORS)
-
-            stones = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
-            walls = np.zeros((C.SIZE_Y, C.SIZE_X), np.int32)
-
-            for dy in [-1, 0, 1]:
-                for dx in [-1, 0, 1]:
-                    if dy != 0 or dx != 0:
-                        stones += utils.isin(utils.translate(level.objects, dy, dx), G.STONE)
-                        walls += utils.isin(utils.translate(level.objects, dy, dx), G.WALL)
-
-            prio += (is_on_door & (stones > 3)) * 250
-            prio += (np.stack([utils.translate(level.walkable, y, x).astype(np.int32)
-                               for y, x in [(1, 0), (-1, 0), (0, 1), (0, -1)]]).sum(0) <= 1) * 250
-            prio[(stones == 0) & (walls == 0)] = -np.inf
-
-            prio[~level.walkable | (dis == -1)] = -np.inf
-
-            if return_prio:
-                return prio
-            return prio >= prio_limit
-
-        @Strategy.wrap
-        def open_visit_search(search_prio_limit):
-            yielded = False
-            while 1:
-                for py, px in self.neighbors(self.blstats.y, self.blstats.x, diagonal=False, shuffle=False):
-                    if self.glyphs[py, px] in G.DOOR_CLOSED:
-                        if not yielded:
-                            yielded = True
-                            yield True
-                        open_neighbor_doors()
-                        break
-
-                to_visit = to_visit_func()
-                to_search = to_search_func(search_prio_limit if search_prio_limit is not None else 0)
-
-                # consider exploring tile only when there is a path to it
-                dis = self.bfs()
-                to_explore = (to_visit | to_search) & (dis != -1)
-
-                dynamic_search_fallback = False
-                if not to_explore.any():
-                    dynamic_search_fallback = True
-                else:
-                    # find all closest to_explore tiles
-                    nonzero_y, nonzero_x = ((dis == dis[to_explore].min()) & to_explore).nonzero()
-                    if len(nonzero_y) == 0:
-                        dynamic_search_fallback = True
-
-                if dynamic_search_fallback:
-                    if search_prio_limit is not None and search_prio_limit >= 0:
-                        if not yielded:
-                            yield False
-                        return
-
-                    search_prio = to_search_func(return_prio=True)
-                    if search_prio_limit is not None:
-                        search_prio[search_prio < search_prio_limit] = -np.inf
-                        search_prio[search_prio < search_prio_limit] = -np.inf
-                        search_prio -= dis * np.isfinite(search_prio) * 100
-                    else:
-                        search_prio -= dis * 4
-
-                    to_search = np.isfinite(search_prio)
-                    to_explore = (to_visit | to_search) & (dis != -1)
-                    if not to_explore.any():
-                        if not yielded:
-                            yield False
-                        return
-                    nonzero_y, nonzero_x = ((search_prio == search_prio[to_explore].max()) & to_explore).nonzero()
-
-                if not yielded:
-                    yielded = True
-                    yield True
-
-                # select random closest to_explore tile
-                i = self.rng.randint(len(nonzero_y))
-                target_y, target_x = nonzero_y[i], nonzero_x[i]
-
-                with self.env.debug_tiles(to_explore, color=(0, 0, 255, 64)):
-                    self.go_to(target_y, target_x, debug_tiles_args=dict(
-                        color=(255 * bool(to_visit[target_y, target_x]),
-                               255, 255 * bool(to_search[target_y, target_x])),
-                        is_path=True))
-                    if to_search[target_y, target_x] and not to_visit[target_y, target_x]:
-                        self.search()
-
-            assert search_prio_limit is not None
-
-        return open_visit_search(search_prio_limit).preempt(self, [
-            self.inventory.gather_items(),
-        ])
-
-    @utils.debug_log('move_down')
-    @Strategy.wrap
-    def move_down(self):
-        level = self.current_level()
-
-        mask = utils.isin(level.objects, G.STAIR_DOWN)
-        if not mask.any():
-            yield False
-
-        mask &= (self.bfs() != -1)
-        if not mask.any():
-            yield False
-        yield True
-
-        nonzero_y, nonzero_x = mask.nonzero()
-        target_y, target_x = nonzero_y[0], nonzero_x[0]
-
-        self.go_to(target_y, target_x, debug_tiles_args=dict(color=(0, 0, 255), is_path=True))
-        with self.env.debug_log('waiting for a pet'):
-            for _ in range(8):
-                for y, x in self.neighbors(self.blstats.y, self.blstats.x):
-                    if self.glyphs[y, x] in G.PETS:
-                        break
-                else:
-                    self.direction('.')
-                    continue
-                break
-            self.direction('>')
 
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
@@ -993,23 +1054,27 @@ class Agent:
         if (
                 ((self.last_prayer_turn is None and self.blstats.time > 300) or
                  (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > 900)) and
-                (self.blstats.hitpoints < 1/(5 if self.blstats.experience_level < 6 else 6) * self.blstats.max_hitpoints or
-                 self.blstats.hitpoints < 6 or self.blstats.hunger_state >= Hunger.FAINTING)
-                ):
+                (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
+                 * self.blstats.max_hitpoints or self.blstats.hitpoints < 6
+                 or self.blstats.hunger_state >= Hunger.FAINTING)
+        ):
             yield True
             self.last_prayer_turn = self.blstats.time
             self.pray()
             return
 
         if (
-                (self.blstats.hitpoints < 1/3 * self.blstats.max_hitpoints or self.blstats.hitpoints < 8 or self.blstats.hunger_state >= Hunger.FAINTING) and
+                (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
+                 or self.blstats.hitpoints < 8 or self.blstats.hunger_state >= Hunger.FAINTING) and
                 len([s for s in map(lambda x: bytes(x).decode(), self.last_observation['inv_strs'])
-                     if 'potion of healing' in s or 'potion of extra healing' in s or 'potion of full healing' in s]) > 0
-                ):
+                     if 'potion of healing' in s or 'potion of extra healing' in s
+                        or 'potion of full healing' in s]) > 0
+        ):
             yield True
             with self.atom_operation():
                 self.type_text('q')
-                for letter, s in zip(self.last_observation['inv_letters'], map(lambda x: bytes(x).decode(), self.last_observation['inv_strs'])):
+                for letter, s in zip(self.last_observation['inv_letters'],
+                                     map(lambda x: bytes(x).decode(), self.last_observation['inv_strs'])):
                     if 'potion of healing' in s or 'potion of extra healing' in s or 'potion of full healing' in s:
                         self.type_text(chr(letter))
                         break
@@ -1021,66 +1086,68 @@ class Agent:
 
     ######## HIGH-LEVEL STRATEGIES
 
-    @utils.debug_log('main_strategy')
-    def main_strategy(self):
-        @Strategy.wrap
-        def eat_from_inventory():
-            if not (self.blstats.hunger_state >= Hunger.WEAK and any(
-                    map(lambda item: item.category == nh.FOOD_CLASS,
-                        self.inventory.items))):
-                yield False
-            yield True
-            with self.atom_operation():
-                self.step(A.Command.EAT)
-                while re.search('There is[a-zA-z ]* corpse here', self.message):
-                    self.type_text('n')
-                for item in self.inventory.items:
-                    if item.category == nh.FOOD_CLASS:
-                        self.type_text(self.inventory.items.get_letter(item))
-                        break
-                else:
-                    assert 0
-
-        return \
-            (self.explore1(0).before(self.explore1(None))).preempt(self, [
-                self.move_down().condition(lambda: self.blstats.score > 850 + 100 * len(self.levels) and self.blstats.hitpoints >= 0.9 * self.blstats.max_hitpoints)
-            ]).preempt(self, [
-                self.eat1().condition(lambda: self.blstats.time % 3 == 0 and self.blstats.hunger_state >= Hunger.NOT_HUNGRY),
-                eat_from_inventory(),
-            ]).preempt(self, [
-                self.fight1(),
-            ]).preempt(self, [
-                self.emergency_strategy(),
-            ])
+    @Strategy.wrap
+    def eat_from_inventory(self):
+        if not (self.blstats.hunger_state >= Hunger.WEAK and any(
+                map(lambda item: item.category == nh.FOOD_CLASS,
+                    self.inventory.items))):
+            yield False
+        yield True
+        with self.atom_operation():
+            self.step(A.Command.EAT)
+            while re.search('There (is|are)[a-zA-z0-9 ]* here; eat (it|one)\?', self.message):
+                self.type_text('n')
+            for item in self.inventory.items:
+                if item.category == nh.FOOD_CLASS:
+                    self.type_text(self.inventory.items.get_letter(item))
+                    break
+            else:
+                assert 0
 
     ####### MAIN
 
     def main(self):
-        self.update({k: v.copy() for k, v in self.env.reset().items()})
+        self.step(A.Command.ESC)
+        self.current_level().stair_destination[self.blstats.y, self.blstats.x] = \
+            ((Level.PLANE, 1), (None, None))  # TODO: check level num
         self.character.parse()
         self.character.parse_enhance_view()
-
-        try:
+        self.step(A.Command.AUTOPICKUP)
+        if 'Autopickup: ON' in self.message:
             self.step(A.Command.AUTOPICKUP)
 
+        try:
+            last_step = self.step_count
+            inactivity_counter = 0
             while 1:
+                inactivity_counter += 1
+                if self.step_count != last_step:
+                    inactivity_counter = 0
+                assert inactivity_counter < 5, ('cyclic panic', sorted({p.args[0] for p in self.all_panics[-5:]}))
+
                 try:
+                    self.on_panic()
+
                     self.step(A.Command.ESC)
                     self.step(A.Command.ESC)
-                    self.main_strategy().run()
+                    self.check_terrain(force=True)
+
+                    last_step = self.step_count
+
+                    self.global_logic.global_strategy().run()
                     assert 0
                 except AgentPanic as e:
                     self.all_panics.append(e)
-                    self.on_panic()
                     if self.verbose:
                         print(f'PANIC!!!! : {e}')
                 except AgentFinished:
+                    raise
+                except KeyboardInterrupt:
                     raise
                 except BaseException as e:
                     if not self.panic_on_errors:
                         raise
                     self.all_panics.append(e)
-                    self.on_panic()
                     if self.verbose:
                         print(f'PANIC!!!! : {e}')
         except AgentFinished:

@@ -1,9 +1,37 @@
 import re
 
+import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
 import objects as O
+
+
+class Property:
+    def __init__(self, agent):
+        self.agent = agent
+
+    @property
+    def confusion(self):
+        return 'Conf' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+
+    @property
+    def stun(self):
+        return 'Stun' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+
+    @property
+    def hallu(self):
+        return 'Hallu' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+
+    @property
+    def blind(self):
+        return 'Blind' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+
+    @property
+    def polymorph(self):
+        if not nh.glyph_is_monster(self.agent.glyphs[self.agent.blstats.y, self.agent.blstats.x]):
+            return False
+        return self.agent.character.self_glyph != self.agent.glyphs[self.agent.blstats.y, self.agent.blstats.x]
 
 
 class Character:
@@ -178,18 +206,26 @@ class Character:
 
     def __init__(self, agent):
         self.agent = agent
+        self.prop = Property(agent)
         self.role = None
         self.alignment = None
         self.race = None
         self.gender = None
+        self.self_glyph = None
         self.skill_levels = np.zeros(max(self.name_to_skill_type.values()) + 1, dtype=int)
         self.upgradable_skills = dict()
+
+    @property
+    def carrying_capacity(self):
+        # TODO: levitation, etc
+        return min(1000, (self.agent.blstats.strength_percentage + self.agent.blstats.constitution) * 25 + 50)
 
     def parse(self):
         with self.agent.atom_operation():
             self.agent.step(A.Command.ATTRIBUTES)
             text = ' '.join(self.agent.popup)
             self._parse(text)
+            self.self_glyph = self.agent.glyphs[self.agent.blstats.y, self.agent.blstats.x]
 
     def _parse(self, text):
         matches = re.findall('You are a ([a-z]+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+).', text)
@@ -228,7 +264,13 @@ class Character:
             while self.upgradable_skills:
                 to_upgrade = self.select_skill_to_upgrade()
                 old_skill_level = self.skill_levels.copy()
-                self.agent.step(A.Command.ENHANCE, iter([self.upgradable_skills[to_upgrade]]))
+                letter = self.upgradable_skills[to_upgrade]
+                def type_letter():
+                    while f'{letter} - ' not in '\n'.join(self.agent.popup):
+                        yield A.TextCharacters.SPACE
+                    yield letter
+                self.agent.step(A.Command.ENHANCE, type_letter())
+
                 self.agent.step(A.Command.ENHANCE)
                 self._parse_enhance_view()
                 assert (old_skill_level != self.skill_levels).any(), (old_skill_level, self.skill_levels)
@@ -243,9 +285,13 @@ class Character:
             raise ValueError('Invalid ehance popup text format.' + str(self.agent.popup))
         self.upgradable_skills = dict()
         for line in self.agent.popup[1:]:
-            if line.strip() in self.possible_skill_types:
+            if line.strip() in self.possible_skill_types or \
+                    line.strip() == '(Skill flagged by "#" cannot be enhanced any further.)' or \
+                    line.strip() == '(Skills flagged by "#" cannot be enhanced any further.)' or \
+                    line.strip() == '(Skill flagged by "*" may be enhanced when you\'re more experienced.)' or \
+                    line.strip() == '(Skills flagged by "*" may be enhanced when you\'re more experienced.)':
                 continue
-            matches = re.findall(r'^([a-zA-Z] -)? *' +
+            matches = re.findall(r'^([a-zA-Z] -)?#?\*? *' +
                                  r'(' + '|'.join(self.name_to_skill_type.keys()) + ') *' +
                                  r'\[(' + '|'.join(self.possible_skill_levels) + ')\]', line)
             assert len(matches) == 1, (matches, line)
@@ -344,7 +390,33 @@ class Character:
             # TODO:
             return self.weapon_bonus[self.skill_levels[sub]]
 
-    def get_weapon_bonus(self, item, monster=None, large_monster=False):
+    def get_ranged_bonus(self, launcher, ammo, monster=None, large_monster=False):
+        # TODO: check code/wiki
+
+        if launcher is not None:
+            assert launcher.is_launcher()
+            assert ammo.is_fired_projectile()
+        else:
+            assert ammo.is_thrown_projectile()
+
+        roll_offset = 0
+        dmg_bonus = 0
+        if launcher is not None:
+            skill_hit_bonus, dmg_bonus = self._get_weapon_skill_bonus(launcher)
+            roll_offset += skill_hit_bonus
+            roll_offset += launcher.get_weapon_bonus(large_monster)[0]
+            dmg_bonus += launcher.get_weapon_bonus(large_monster)[1]
+
+        roll_offset += ammo.get_weapon_bonus(large_monster)[0]
+        dmg_bonus += ammo.get_weapon_bonus(large_monster)[1]
+
+        return roll_offset, max(0, dmg_bonus)
+
+    def get_range(self, launcher, ammo):
+        # TODO: implement
+        return 7
+
+    def get_melee_bonus(self, item, monster=None, large_monster=False):
         """ Returns a pair (to_hit, damaga)
         https://github.com/facebookresearch/nle/blob/master/src/uhitm.c : find_roll_to_hit
          """
@@ -395,7 +467,7 @@ class Character:
                 # tmp -= (*role_roll_penalty = urole.spelarmr);
                 roll_offset -= 20
             elif item is None and self.agent.inventory.items.off_hand is None:
-            #  else if (!uwep && !uarms)
+                #  else if (!uwep && !uarms)
                 # tmp += (u.ulevel / 3) + 2;
                 roll_offset += (self.agent.blstats.experience_level // 3) + 2
 
@@ -427,18 +499,30 @@ class Character:
         roll_offset += skill_hit_bonus
 
         if item is not None:
-            dmg_bonus += item.get_dmg(large_monster)
-        return roll_offset, dmg_bonus
+            if item.is_launcher() or item.is_fired_projectile() or item.objs[0].name in ['dart', 'shuriken']:
+                # TODO: rocks, boomerang
+                dmg_bonus = 1.5  # 1d2
+            else:
+                dmg_bonus += item.get_weapon_bonus(large_monster)[1]
+            roll_offset += item.get_weapon_bonus(large_monster)[0]
+        else:
+            # TODO: proper unarmed base damage
+            dmg_bonus += 1.5
+        return roll_offset, max(0, dmg_bonus)
 
-    def __str__(self):
+    def get_skill_str_list(self):
         inv_skill_type = {v: k for k, v in self.name_to_skill_type.items()}
         inv_skill_level = {v: k for k, v in self.name_to_skill_level.items()}
+        return list(inv_skill_type[skill_type] + '-' + inv_skill_level[level]
+                    for skill_type, level in enumerate(self.skill_levels)
+                    if level in inv_skill_level and skill_type in inv_skill_type and level != 0)
+
+    def __str__(self):
         if self.role is None:
             return 'unparsed_character'
-        skill_str = '| '.join(inv_skill_type[skill_type] + '-' + inv_skill_level[level]
-                              for skill_type, level in enumerate(self.skill_levels)
-                              if level in inv_skill_level and skill_type in inv_skill_type and level != 0)
+        skill_str = '| '.join(self.get_skill_str_list())
         if self.upgradable_skills:
+            inv_skill_type = {v: k for k, v in self.name_to_skill_type.items()}
             skill_str += '\n Upgradable: ' + '|'.join(letter + '-' + inv_skill_type[skill]
                                                       for skill, letter in self.upgradable_skills.items())
         return '-'.join([f'{list(d.keys())[list(d.values()).index(v)][:3].lower()}'

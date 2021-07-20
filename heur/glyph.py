@@ -1,3 +1,5 @@
+import functools
+
 import nle.nethack as nh
 
 
@@ -335,11 +337,16 @@ class MON: # monsters, pets
             return f'MON.fn({repr(MON.permonst(glyph).mname)})'
 
     @staticmethod
+    @functools.lru_cache(nh.NUMMONS)
     def from_name(name):
         for i in range(nh.NUMMONS):
             if nh.permonst(i).mname == name:
                 return nh.GLYPH_MON_OFF + i
-        assert 0
+        assert 0, name
+
+    @staticmethod
+    def body_from_name(name):
+        return MON.from_name(name) - nh.GLYPH_MON_OFF + nh.GLYPH_BODY_OFF
 
     fn = from_name
 
@@ -375,6 +382,65 @@ class ALL:
         x = MON.find(glyph) if x is None else x
         return x
 
+
+class Hunger:
+    SATIATED = 0
+    NOT_HUNGRY = 1
+    HUNGRY = 2
+    WEAK = 3
+    FAINTING = 4
+
+
 class C:
     SIZE_X = 79
     SIZE_Y = 21
+
+
+class G:  # Glyphs
+    FLOOR: ['.'] = {SS.S_room, SS.S_ndoor, SS.S_darkroom}
+    VISIBLE_FLOOR: ['.'] = {SS.S_room}
+    STONE: [' '] = {SS.S_stone}
+    WALL: ['|', '-'] = {SS.S_vwall, SS.S_hwall, SS.S_tlcorn, SS.S_trcorn, SS.S_blcorn, SS.S_brcorn,
+                        SS.S_crwall, SS.S_tuwall, SS.S_tdwall, SS.S_tlwall, SS.S_trwall}
+    CORRIDOR: ['#'] = {SS.S_corr}
+    STAIR_UP: ['<'] = {SS.S_upstair}
+    STAIR_DOWN: ['>'] = {SS.S_dnstair}
+    ALTAR: ['_'] = {SS.S_altar}
+    FOUNTAIN = {SS.S_fountain}
+
+    DOOR_CLOSED: ['+'] = {SS.S_vcdoor, SS.S_hcdoor}
+    DOOR_OPENED: ['-', '|'] = {SS.S_vodoor, SS.S_hodoor}
+    DOORS = set.union(DOOR_CLOSED, DOOR_OPENED)
+
+    BARS = {SS.S_bars}
+
+    MONS = set(MON.ALL_MONS)
+    PETS = set(MON.ALL_PETS)
+    INVISIBLE_MON = {nh.GLYPH_INVISIBLE}
+
+    STATUES = {i + nh.GLYPH_STATUE_OFF for i in range(nh.NUMMONS)}
+
+    BODIES = {nh.GLYPH_BODY_OFF + i for i in range(nh.NUMMONS)}
+    OBJECTS = {nh.GLYPH_OBJ_OFF + i for i in range(nh.NUM_OBJECTS) if ord(nh.objclass(i).oc_class) != nh.ROCK_CLASS}
+    BOULDER = {nh.GLYPH_OBJ_OFF + i for i in range(nh.NUM_OBJECTS) if ord(nh.objclass(i).oc_class) == nh.ROCK_CLASS}
+
+    NORMAL_OBJECTS = {i for i in range(nh.MAX_GLYPH) if nh.glyph_is_normal_object(i)}
+    FOOD_OBJECTS = {i for i in NORMAL_OBJECTS if ord(nh.objclass(nh.glyph_to_obj(i)).oc_class) == nh.FOOD_CLASS}
+
+    TRAPS = {SS.S_arrow_trap, SS.S_dart_trap, SS.S_falling_rock_trap, SS.S_squeaky_board, SS.S_bear_trap,
+             SS.S_land_mine, SS.S_rolling_boulder_trap, SS.S_sleeping_gas_trap, SS.S_rust_trap, SS.S_fire_trap,
+             SS.S_pit, SS.S_spiked_pit, SS.S_hole, SS.S_trap_door, SS.S_teleportation_trap, SS.S_level_teleporter,
+             SS.S_magic_portal, SS.S_web, SS.S_statue_trap, SS.S_magic_trap, SS.S_anti_magic_trap, SS.S_polymorph_trap}
+
+    DICT = {k: v for k, v in locals().items() if not k.startswith('_')}
+
+    @classmethod
+    def assert_map(cls, glyphs, chars):
+        for glyph, char in zip(glyphs.reshape(-1), chars.reshape(-1)):
+            char = bytes([char]).decode()
+            for k, v in cls.__annotations__.items():
+                assert glyph not in cls.DICT[k] or char in v, f'{k} {v} {glyph} {char}'
+
+
+G.INV_DICT = {i: [k for k, v in G.DICT.items() if i in v]
+              for i in set.union(*map(set, G.DICT.values()))}
