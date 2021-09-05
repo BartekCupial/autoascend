@@ -94,10 +94,11 @@ def single_game(i):
 
 if __name__ == "__main__":
     NUM_ASSESSMENTS = int(sys.argv[1])
+    NUM_THREADS = int(sys.argv[2])
 
     start_time = time.time()
 
-    with Pool(4) as pool:
+    with Pool(NUM_THREADS) as pool:
         scores = list(pool.map(single_game, range(NUM_ASSESSMENTS)))
 
     print('scores  :', scores)
