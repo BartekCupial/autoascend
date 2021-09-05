@@ -1,12 +1,19 @@
+import cv2
 import functools
 from functools import partial, wraps
 from itertools import chain
 
-import numba as nb
 import numpy as np
 import toolz
 
 from strategy import Strategy
+
+try:
+    import numba as nb
+except ImportError:
+    class nb:
+        b1 = bool
+        njit = lambda *a, **k: (lambda f: f)
 
 
 @nb.njit(cache=True)
@@ -107,6 +114,11 @@ def isin(array, *elems):
     return _isin_kernel(array, mi, ma, mask)
 
 
+def any_in(array, *elems):
+    # TODO: optimize
+    return isin(array, *elems).any()
+
+
 @toolz.curry
 def debug_log(txt, fun, color=(255, 255, 255)):
     @wraps(fun)
@@ -158,3 +170,24 @@ def copy_result(func):
             return tuple((x.copy() if isinstance(x, list) else x for x in ret))
         return ret.copy()
     return f
+
+
+def dilate(mask, radius=1, with_diagonal=True):
+    d = radius * 2 + 1
+    if with_diagonal:
+        kernel = np.ones((d, d), dtype=np.uint8)
+    else:
+        kernel = np.zeros((d, d), dtype=np.uint8)
+        kernel[radius : radius + 1, :] = 1
+        kernel[:, radius : radius + 1] = 1
+    return cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
+
+
+def slice_with_padding(array, a1, a2, b1, b2, pad_value=0):
+    ret = np.zeros_like(array, shape=(a2 - a1, b2 - b1)) + pad_value
+    off_a1 = -a1 if a1 < 0 else 0
+    off_b1 = -b1 if b1 < 0 else 0
+    off_a2 = array.shape[0] - a2 if a2 > array.shape[0] else ret.shape[0]
+    off_b2 = array.shape[1] - b2 if b2 > array.shape[1] else ret.shape[1]
+    ret[off_a1 : off_a2, off_b1 : off_b2] = array[max(0, a1) : a2, max(0, b1) : b2]
+    return ret

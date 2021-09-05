@@ -108,7 +108,7 @@ class Strategy:
             def f2():
                 try:
                     next(gen)
-                    assert 0
+                    assert 0, gen
                 except StopIteration as e:
                     return e.value
 
@@ -150,6 +150,7 @@ class Strategy:
                 assert 0
             it = self.strategy()
             yield next(it)
+            current_num = -1
             try:
                 next(it)
                 assert 0

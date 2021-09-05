@@ -312,6 +312,70 @@ class MON: # monsters, pets
     G_GONE = (G_GENOD | G_EXTINCT)
     MV_KNOWS_EGG = 0x0008 #/* player recognizes egg of this monster type */
 
+    S_ANT        =  1#, /* a */
+    S_BLOB       =  2#, /* b */
+    S_COCKATRICE =  3#, /* c */
+    S_DOG        =  4#, /* d */
+    S_EYE        =  5#, /* e */
+    S_FELINE     =  6#, /* f: cats */
+    S_GREMLIN    =  7#, /* g */
+    S_HUMANOID   =  8#, /* h: small humanoids: hobbit, dwarf */
+    S_IMP        =  9#, /* i: minor demons */
+    S_JELLY      = 10#, /* j */
+    S_KOBOLD     = 11#, /* k */
+    S_LEPRECHAUN = 12#, /* l */
+    S_MIMIC      = 13#, /* m */
+    S_NYMPH      = 14#, /* n */
+    S_ORC        = 15#, /* o */
+    S_PIERCER    = 16#, /* p */
+    S_QUADRUPED  = 17#, /* q: excludes horses */
+    S_RODENT     = 18#, /* r */
+    S_SPIDER     = 19#, /* s */
+    S_TRAPPER    = 20#, /* t */
+    S_UNICORN    = 21#, /* u: includes horses */
+    S_VORTEX     = 22#, /* v */
+    S_WORM       = 23#, /* w */
+    S_XAN        = 24#, /* x */
+    S_LIGHT      = 25#, /* y: yellow light, black light */
+    S_ZRUTY      = 26#, /* z */
+    S_ANGEL      = 27#, /* A */
+    S_BAT        = 28#, /* B */
+    S_CENTAUR    = 29#, /* C */
+    S_DRAGON     = 30#, /* D */
+    S_ELEMENTAL  = 31#, /* E: includes invisible stalker */
+    S_FUNGUS     = 32#, /* F */
+    S_GNOME      = 33#, /* G */
+    S_GIANT      = 34#, /* H: large humanoid: giant, ettin, minotaur */
+    S_invisible  = 35#, /* I: non-class present in def_monsyms[] */
+    S_JABBERWOCK = 36#, /* J */
+    S_KOP        = 37#, /* K */
+    S_LICH       = 38#, /* L */
+    S_MUMMY      = 39#, /* M */
+    S_NAGA       = 40#, /* N */
+    S_OGRE       = 41#, /* O */
+    S_PUDDING    = 42#, /* P */
+    S_QUANTMECH  = 43#, /* Q */
+    S_RUSTMONST  = 44#, /* R */
+    S_SNAKE      = 45#, /* S */
+    S_TROLL      = 46#, /* T */
+    S_UMBER      = 47#, /* U: umber hulk */
+    S_VAMPIRE    = 48#, /* V */
+    S_WRAITH     = 49#, /* W */
+    S_XORN       = 50#, /* X */
+    S_YETI       = 51#, /* Y: includes owlbear, monkey */
+    S_ZOMBIE     = 52#, /* Z */
+    S_HUMAN      = 53#, /* @ */
+    S_GHOST      = 54#, /* <space> */
+    S_GOLEM      = 55#, /* ' */
+    S_DEMON      = 56#, /* & */
+    S_EEL        = 57#, /* ; (fish) */
+    S_LIZARD     = 58#, /* : (reptiles) */
+
+    S_WORM_TAIL  = 59#, /* ~ */
+    S_MIMIC_DEF  = 60#, /* ] */
+
+    MAXMCLASSES  = 61#  /* number of monster classes */
+
     @staticmethod
     def is_monster(glyph):
         return nh.glyph_is_monster(glyph)
@@ -330,7 +394,7 @@ class MON: # monsters, pets
         elif nh.glyph_is_body(glyph):
             return nh.permonst(glyph - nh.GLYPH_BODY_OFF)
         else:
-            assert 0
+            assert 0, glyph
 
     @staticmethod
     def find(glyph):
@@ -384,6 +448,26 @@ class ALL:
         return x
 
 
+class SHOP:
+    UNKNOWN = 0
+    # names from nle/src/shknam.c
+    name2id = {
+        'UNKNOWN': UNKNOWN,
+        "general store": 1,
+        "used armor dealership": 2,
+        "second-hand bookstore": 3,
+        "liquor emporium": 4,
+        "antique weapons outlet": 5,
+        "delicatessen": 6,
+        "jewelers": 7,
+        "quality apparel and accessories": 8,
+        "hardware store": 9,
+        "rare books": 10,
+        "health food store": 11,
+        "lighting store": 12,
+    }
+
+
 class Hunger:
     SATIATED = 0
     NOT_HUNGRY = 1
@@ -398,14 +482,13 @@ class C:
 
 
 class G:  # Glyphs
-    FLOOR: ['.'] = frozenset({SS.S_room, SS.S_ndoor, SS.S_darkroom})
-    VISIBLE_FLOOR: ['.'] = frozenset({SS.S_room})
+    FLOOR: ['.'] = frozenset({SS.S_room, SS.S_ndoor, SS.S_darkroom, SS.S_corr, SS.S_litcorr})
+    VISIBLE_FLOOR: ['.'] = frozenset({SS.S_room, SS.S_litcorr})
     STONE: [' '] = frozenset({SS.S_stone})
     WALL: ['|', '-'] = frozenset({SS.S_vwall, SS.S_hwall, SS.S_tlcorn, SS.S_trcorn, SS.S_blcorn, SS.S_brcorn,
                                   SS.S_crwall, SS.S_tuwall, SS.S_tdwall, SS.S_tlwall, SS.S_trwall})
-    CORRIDOR: ['#'] = frozenset({SS.S_corr})
-    STAIR_UP: ['<'] = frozenset({SS.S_upstair})
-    STAIR_DOWN: ['>'] = frozenset({SS.S_dnstair})
+    STAIR_UP: ['<'] = frozenset({SS.S_upstair, SS.S_upladder})
+    STAIR_DOWN: ['>'] = frozenset({SS.S_dnstair, SS.S_dnladder})
     ALTAR: ['_'] = frozenset({SS.S_altar})
     FOUNTAIN = frozenset({SS.S_fountain})
 
@@ -417,7 +500,11 @@ class G:  # Glyphs
 
     MONS = frozenset(MON.ALL_MONS)
     PETS = frozenset(MON.ALL_PETS)
-    INVISIBLE_MON = frozenset({nh.GLYPH_INVISIBLE})
+    WARNING = frozenset({nh.GLYPH_WARNING_OFF + i for i in range(nh.WARNCOUNT)})
+    INVISIBLE_MON = frozenset({nh.GLYPH_INVISIBLE, *WARNING})
+
+    SHOPKEEPER = frozenset({MON.fn('shopkeeper')})
+    ORACLE = frozenset({MON.fn('Oracle')})
 
     STATUES = frozenset({i + nh.GLYPH_STATUE_OFF for i in range(nh.NUMMONS)})
 
@@ -436,6 +523,8 @@ class G:  # Glyphs
                        SS.S_fire_trap, SS.S_pit, SS.S_spiked_pit, SS.S_hole, SS.S_trap_door, SS.S_teleportation_trap,
                        SS.S_level_teleporter, SS.S_magic_portal, SS.S_web, SS.S_statue_trap, SS.S_magic_trap,
                        SS.S_anti_magic_trap, SS.S_polymorph_trap})
+
+    SWALLOW = frozenset(range(nh.GLYPH_SWALLOW_OFF, nh.GLYPH_WARNING_OFF))
 
     DICT = {k: v for k, v in locals().items() if not k.startswith('_')}
 

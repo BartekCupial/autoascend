@@ -35,6 +35,8 @@ class Property:
 
 
 class Character:
+    UNKNOWN = -1  # for everything, e.g. alignment
+
     ARCHEOLOGIST = 0
     BARBARIAN = 1
     CAVEMAN = 2
@@ -70,11 +72,13 @@ class Character:
     CHAOTIC = 0
     NEUTRAL = 1
     LAWFUL = 2
+    UNALIGNED = 3
 
     name_to_alignment = {
         'chaotic': CHAOTIC,
         'neutral': NEUTRAL,
         'lawful': LAWFUL,
+        'unaligned': UNALIGNED,
     }
 
     HUMAN = 0
@@ -190,6 +194,7 @@ class Character:
         SKILL_LEVEL_GRAND_MASTER: (3, 3),
     }
     martial_bonus = {
+        SKILL_LEVEL_RESTRICTED: (1, 0),  #  no one has it restricted
         SKILL_LEVEL_UNSKILLED: (2, 1),
         SKILL_LEVEL_BASIC: (3, 3),
         SKILL_LEVEL_SKILLED: (4, 4),
@@ -214,6 +219,14 @@ class Character:
         self.self_glyph = None
         self.skill_levels = np.zeros(max(self.name_to_skill_type.values()) + 1, dtype=int)
         self.upgradable_skills = dict()
+
+        self.is_lycanthrope = False
+
+    def update(self):
+        if 'You feel feverish.' in self.agent.message:
+            self.is_lycanthrope = True
+        if 'You feel purified.' in self.agent.message:
+            self.is_lycanthrope = False
 
     @property
     def carrying_capacity(self):
@@ -266,7 +279,7 @@ class Character:
                 old_skill_level = self.skill_levels.copy()
                 letter = self.upgradable_skills[to_upgrade]
                 def type_letter():
-                    while f'{letter} - ' not in '\n'.join(self.agent.popup):
+                    while f'{letter} - ' not in '\n'.join(self.agent.single_popup):
                         yield A.TextCharacters.SPACE
                     yield letter
                 self.agent.step(A.Command.ENHANCE, type_letter())

@@ -9,52 +9,67 @@ import soko_solver
 import utils
 from character import Character
 from exceptions import AgentPanic
-from glyph import Hunger, G
-from item import Item, ItemPriorityBase
+from glyph import Hunger, G, MON
+from item import Item, ItemPriorityBase, flatten_items
 from level import Level
 from strategy import Strategy
 
 
 class ItemPriority(ItemPriorityBase):
-    MAX_NUMBER_OF_ITEMS = 26 * 2  # + coin slot
+    MAX_NUMBER_OF_ITEMS = 26 * 2 - 1  # + coin slot, one slot should be left for item arranging
     def __init__(self, agent):
         self.agent = agent
+        self._take_sacrificial_corpses = False
 
-    def split(self, items, forced_items, weight_capacity):
+    def _split(self, items, forced_items, weight_capacity):
         remaining_weight = weight_capacity
-        ret = {}
+        ret_inv = {}
         for item in forced_items:
             remaining_weight -= item.weight()
-            ret[item] = item.count
+            ret_inv[item] = item.count
 
-        def add_item(item, count=None):
-            nonlocal ret, remaining_weight
+        ret_bag = {}
+        bag = None
+
+        def add_item(item, count=None, to_bag=False):
+            nonlocal ret_inv, ret_bag, remaining_weight
             assert isinstance(item, Item)
-            if remaining_weight < 0 or len(ret) >= ItemPriority.MAX_NUMBER_OF_ITEMS:  # TODO: coin slot
+            if to_bag and bag is not None and item is not bag:
+                ret = ret_bag
+            else:
+                ret = ret_inv
+
+            if remaining_weight < 0 or \
+                    (ret is ret_inv and len(ret) >= ItemPriority.MAX_NUMBER_OF_ITEMS):  # TODO: coin slot
                 return
 
+            how_many_already_total = ret_inv.get(item, 0) + ret_bag.get(item, 0)
             how_many_already = ret.get(item, 0)
-            max_to_add = int(remaining_weight // item.unit_weight())
+            max_to_add = int(remaining_weight // item.unit_weight(with_content=False))
             if count is not None:
                 max_to_add = min(max_to_add, count)
-            ret[item] = min(item.count, how_many_already + max_to_add)
-            remaining_weight -= item.unit_weight() * (ret[item] - how_many_already)
+            ret[item] = min(item.count, how_many_already_total + max_to_add) - (how_many_already_total - how_many_already)
+            remaining_weight -= item.unit_weight(with_content=False) * (ret[item] - how_many_already)
+
+        for item in items:
+            if item.is_container() and item.status in [Item.UNCURSED, Item.BLESSED] and item.objs[0].desc == 'bag':
+                bag = item  # TODO: select the best
+                add_item(bag)
+                break
 
         for allow_unknown_status in [False, True]:
             item = self.agent.inventory.get_best_melee_weapon(items=forced_items + items,
                                                               allow_unknown_status=allow_unknown_status)
             if item is not None:
-                if item not in ret:
-                    add_item(item)
+                add_item(item)
 
             for item in self.agent.inventory.get_best_armorset(items=forced_items + items,
                                                                allow_unknown_status=allow_unknown_status):
                 if item is not None:
-                    if item not in ret:
-                        add_item(item)
+                    add_item(item)
 
         for item in items:
-            if item.is_ambiguous():
+            if item.is_unambiguous():
                 if item.object in [
                         O.from_name('healing', nh.POTION_CLASS),
                         O.from_name('extra healing', nh.POTION_CLASS),
@@ -66,36 +81,57 @@ class ItemPriority(ItemPriorityBase):
                         (item.is_launcher() or item.is_fired_projectile()):
                     add_item(item)
 
+        if self.agent.character.alignment == Character.LAWFUL:
+            for item in sorted(filter(lambda i: i.objs[0].name == 'long sword', items),
+                               key=lambda i: -utils.calc_dps(*self.agent.character.get_melee_bonus(i))):
+                add_item(item)
+                break
+
         for item in sorted(filter(lambda i: i.is_thrown_projectile(), items),
-                           key=lambda i: -utils.calc_dps(*self.agent.character.get_melee_bonus(i))):
+                           key=lambda i: -utils.calc_dps(*self.agent.character.get_ranged_bonus(None, i))):
             add_item(item)
 
-        for item in sorted(filter(lambda i: i.is_food(), items), key=lambda x: -x.nutrition_per_weight()):
+        for item in sorted(filter(lambda i: i.is_food() and not i.is_corpse(), items),
+                           key=lambda x: -x.nutrition_per_weight() - 1000 * (x.objs[0].name == 'sprig of wolfsbane')):
             add_item(item)
+
+        if self._take_sacrificial_corpses:
+            for item in filter(self.agent.global_logic.can_sacrify, items):
+                add_item(item)
 
         # TODO: take nh.COIN_CLASS once shopping is implemented.
         # You have to drop all coins not to be attacked by a vault guard
 
-        for item in sorted(items, key=lambda i: i.unit_weight()):
+        for item in sorted(items, key=lambda i: i.unit_weight(with_content=False)):
             if item.category in [nh.POTION_CLASS, nh.RING_CLASS, nh.AMULET_CLASS, nh.WAND_CLASS, nh.SCROLL_CLASS,
                                  nh.TOOL_CLASS]:
-                if not isinstance(item.objs[0], O.Container) or item.objs[0].desc is not None:
-                    add_item(item)
+                if (not isinstance(item.objs[0], O.Container) or item.objs[0].desc == 'bag') and \
+                        not item.is_possible_container():
+                    add_item(item, to_bag=True)
 
         categories = [nh.WEAPON_CLASS, nh.ARMOR_CLASS, nh.TOOL_CLASS, nh.FOOD_CLASS, nh.GEM_CLASS, nh.AMULET_CLASS,
                       nh.RING_CLASS, nh.POTION_CLASS, nh.SCROLL_CLASS, nh.SPBOOK_CLASS, nh.WAND_CLASS]
-        for item in sorted(items, key=lambda i: i.unit_weight()):
-            if item.category in categories and (not isinstance(item.objs[0], O.Container) or item.objs[0].desc is not None):
+        for item in sorted(items, key=lambda i: i.unit_weight(with_content=False)):
+            if item.category in categories and not isinstance(item.objs[0], O.Container) and not item.is_corpse():
                 if item.status == Item.UNKNOWN:
-                    add_item(item)
+                    add_item(item, to_bag=True)
 
-        return [ret.get(item, 0) for item in items]
+        r = {None: [ret_inv.get(item, 0) for item in items]}
+        if bag is not None:
+            r[bag] = [ret_bag.get(item, 0) for item in items]
+        for item in items:
+            if item.is_container() and item is not bag and ret_inv.get(item, 0) != 0:
+                r[item] = [0 for _ in items]
+        return r
 
 
 class Milestone(IntEnum):
+    BE_ON_FIRST_LEVEL = auto()
     FIND_GNOMISH_MINES = auto()
+    FIND_MINETOWN = auto()
     FIND_SOKOBAN = auto()
     SOLVE_SOKOBAN = auto()
+    FIND_MINES_END = auto()
     GO_DOWN = auto() # TODO
 
 
@@ -106,6 +142,26 @@ class GlobalLogic:
         self.step_completion_log = {}  # Milestone -> (step, turn)
 
         self.item_priority = ItemPriority(self.agent)
+
+        self.oracle_level = None
+        self.minetown_level = None
+
+        self._got_artifact = False
+
+    def update(self):
+        if not self.agent.character.prop.hallu:
+            if utils.isin(self.agent.glyphs, G.ORACLE).any():
+                if self.oracle_level is None:
+                    self.oracle_level = self.agent.current_level().key()
+                else:
+                    assert self.oracle_level == self.agent.current_level().key()
+
+            if self.agent.current_level().dungeon_number == Level.GNOMISH_MINES and \
+                    utils.isin(self.agent.glyphs, G.SHOPKEEPER).any():
+                if self.minetown_level is None:
+                    self.minetown_level = self.agent.current_level().key()
+                else:
+                    assert self.minetown_level == self.agent.current_level().key()
 
     @utils.debug_log('solving sokoban')
     @Strategy.wrap
@@ -124,19 +180,21 @@ class GlobalLogic:
                     message = self.agent.message
 
                 if (self.agent.blstats.y, self.agent.blstats.x) == (ty, tx):
-                    assert 'You hear a monster behind the boulder.' in message, message
+                    assert 'You hear a monster behind the boulder.' in message or \
+                           'You try to move the boulder, but in vain.' in message, message
                     if self.agent.bfs()[ty + dy, tx + dx] != -1:
                         self.agent.go_to(ty + dy, tx + dx, debug_tiles_args=dict(color=(255, 255, 255), is_path=True))
                         continue
                     else:
                         pickaxe = None
-                        for item in self.agent.inventory.items:
-                            if item.is_ambiguous() and \
+                        for item in flatten_items(self.agent.inventory.items):
+                            if item.is_unambiguous() and \
                                     item.object in [O.from_name('pick-axe'), O.from_name('dwarvish mattock')]:
                                 pickaxe = item
                                 break
                         if pickaxe is not None:
                             with self.agent.atom_operation():
+                                pickaxe = self.agent.inventory.move_to_inventory(pickaxe)
                                 self.agent.step(A.Command.APPLY)
                                 self.agent.type_text(self.agent.inventory.items.get_letter(pickaxe))
                                 self.agent.direction(direction)
@@ -144,8 +202,8 @@ class GlobalLogic:
                 else:
                     return
 
-            # TODO: not sure what to do
-            self.agent.exploration.explore(None).run()
+                # TODO: not sure what to do
+                self.agent.exploration.explore1(None).run()
 
         while 1:
             wall_map = utils.isin(self.agent.current_level().objects, G.WALL)
@@ -266,15 +324,19 @@ class GlobalLogic:
         if not mask.any():
             yield False
 
-        yield any((item.status == Item.UNKNOWN for item in self.agent.inventory.items
+        yield any((item.status == Item.UNKNOWN for item in flatten_items(self.agent.inventory.items)
                    if item.can_be_dropped_from_inventory()))
 
         (ty, tx), *_ = zip(*(mask & (dis == dis[mask].min())).nonzero())
         self.agent.go_to(ty, tx)
-        items_to_drop = [item for item in self.agent.inventory.items
+        items_to_drop = [item for item in flatten_items(self.agent.inventory.items)
                          if item.can_be_dropped_from_inventory() and item.status == Item.UNKNOWN]
         if not items_to_drop:
             raise AgentPanic('items to drop on altar vanished')
+
+        # TODO: move chunking to inventory.drop
+        items_to_drop = items_to_drop[:self.agent.inventory.items.free_slots()]
+
         self.agent.inventory.drop(items_to_drop)
 
     @utils.debug_log('dip_for_excalibur')
@@ -282,103 +344,242 @@ class GlobalLogic:
     def dip_for_excalibur(self):
         if self.agent.character.alignment != Character.LAWFUL or self.agent.blstats.experience_level < 5:
             yield False
+        if self.agent.current_level().dungeon_number == Level.GNOMISH_MINES and \
+                (self.minetown_level is None or self.agent.current_level().key() == self.minetown_level):
+            yield False
 
         dis = self.agent.bfs()
         mask = utils.isin(self.agent.current_level().objects, G.FOUNTAIN) & (dis != -1)
         if not mask.any():
             yield False
 
-        candidate = None
-        for item in self.agent.inventory.items:
-            if item.is_ambiguous() and item.object == O.from_name('long sword'):
-                if item.dmg_bonus is not None: # TODO: better condition for excalibur existance
-                    yield False
-                candidate = item
+        def excalibur_candidate():
+            candidate = None
+            for item in flatten_items(self.agent.inventory.items):
+                if item.is_unambiguous() and item.object == O.from_name('long sword'):
+                    if item.dmg_bonus is not None: # TODO: better condition for excalibur existance
+                        return None
+                    candidate = item
+            return candidate
 
-        if candidate is None:
+        if excalibur_candidate() is None:
             yield False
         yield True
 
         self.agent.go_to(*list(zip(*mask.nonzero()))[0])
 
+        candidate = excalibur_candidate()
+        if candidate is None:
+            return
+
         # TODO: refactor
         with self.agent.atom_operation():
+            candidate = self.agent.inventory.move_to_inventory(candidate)
             self.agent.step(A.Command.DIP)
+            self.agent.type_text(self.agent.inventory.items.get_letter(candidate))
             if 'What do you want to dip ' in self.agent.message and 'into?' in self.agent.message:
                 raise AgentPanic('no fountain here')
-            self.agent.type_text(self.agent.inventory.items.get_letter(candidate))
+
+    def can_sacrify(self, item):
+        if not item.is_corpse() or item.comment == 'old':
+            return False
+
+        mname = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mname
+        if (mname == 'pony' and self.agent.character.role in [Character.KNIGHT, Character.BARBARIAN]) or \
+                (mname == 'kitten' and self.agent.character.role == [Character.BARBARIAN, Character.WIZARD]) or \
+                (mname == 'little dog' and item.naming):  # little dogs are always named
+            # sufficient condition for being an initial pet
+            return False
+
+        if self.agent.character.alignment != Character.CHAOTIC:
+            mapping = {
+                Character.HUMAN: MON.M2_HUMAN | MON.M2_WERE,
+                Character.DWARF: MON.M2_DWARF,
+                Character.ELF: MON.M2_ELF,
+                Character.GNOME: MON.M2_GNOME,
+                Character.ORC: MON.M2_ORC,
+            }
+            f2 = MON.permonst(item.monster_id + nh.GLYPH_MON_OFF).mflags2
+            if (f2 & mapping[self.agent.character.race]) > 0:
+                return False
+
+        return True
+
+    @utils.debug_log('offer_corpses')
+    @Strategy.wrap
+    def offer_corpses(self):
+        self.item_priority._take_sacrificial_corpses = False
+
+        if self._got_artifact:
+            yield False
+
+        altars = [p for p, alignment in self.agent.current_level().altars.items()
+                  if alignment == self.agent.character.alignment]
+
+        if not altars:
+            yield False
+
+        dis = self.agent.bfs()
+        altars = [(y, x) for y, x in altars if dis[y, x] != -1]
+
+        if not altars:
+            yield False
+
+        self.item_priority._take_sacrificial_corpses = True
+
+        if not any((self.can_sacrify(item) for item in flatten_items(self.agent.inventory.items))):
+            yield False
+
+        yield True
+
+        y, x = min(altars, key=lambda p: dis[p])
+        self.agent.go_to(y, x)
+        with self.agent.panic_if_position_changes():
+            while 1:
+                for item in flatten_items(self.agent.inventory.items):
+                    if self.can_sacrify(item):
+                        with self.agent.atom_operation():
+                            item = self.agent.inventory.move_to_inventory(item)
+                            assert self.can_sacrify(item)
+                            self.agent.step(A.Command.OFFER)
+                            while ('There is ' in self.agent.message or 'There are ' in self.agent.message) and \
+                                    ('sacrifice it?' in self.agent.message or 'sacrifice one?' in self.agent.message):
+                                self.agent.type_text('n')
+                            assert 'What do you want to sacrifice?' in self.agent.message, self.agent.message
+                            self.agent.type_text(self.agent.inventory.items.get_letter(item))
+                            if 'Nothing happens.' in self.agent.message:
+                                self.agent.inventory.call_item(item, 'old')
+                                return
+                            if 'Use my gift wisely' in self.agent.message:
+                                self._got_artifact = True
+                                self.agent.inventory.get_items_below_me()
+                                return
+                            assert 'Your sacrifice is consumed in a flash of light' in self.agent.message or \
+                                'Your sacrifice is consumed in a burst of flame' in self.agent.message or \
+                                ('The blood covers the altar!' in self.agent.message and \
+                                 'You have summoned ' in self.agent.message), \
+                                self.agent.message
+                            break
+                else:
+                    break
 
     @Strategy.wrap
     def current_strategy(self):
-        if self.milestone == Milestone.FIND_GNOMISH_MINES and \
-                self.agent.current_level().dungeon_number == Level.GNOMISH_MINES:
-            self.milestone = Milestone(int(self.milestone) + 1)
-        elif self.milestone == Milestone.FIND_SOKOBAN and \
-                self.agent.current_level().dungeon_number == Level.SOKOBAN:
-            self.milestone = Milestone(int(self.milestone) + 1)
-        elif self.milestone == Milestone.SOLVE_SOKOBAN and \
-                self.agent.current_level().key() == (Level.SOKOBAN, 1) and \
-                not utils.isin(self.agent.current_level().objects, G.DOOR_CLOSED).any():
-            self.milestone = Milestone(int(self.milestone) + 1)
+        yield True
+        while 1:
+            explore_stairs_condition = lambda: False
+            if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
+                condition = lambda: self.agent.blstats.experience_level >= 7
+                # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
+                #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
+                level = (Level.DUNGEONS_OF_DOOM, 1)
 
-        if self.milestone == Milestone.FIND_GNOMISH_MINES:
-            level = (Level.GNOMISH_MINES, 1)
-        elif self.milestone == Milestone.FIND_SOKOBAN:
-            level = (Level.SOKOBAN, 4)
-        elif self.milestone == Milestone.SOLVE_SOKOBAN:
-            level = (Level.SOKOBAN, 1)
-        else:
-            level = (Level.GNOMISH_MINES, 10)
+            elif self.milestone == Milestone.FIND_SOKOBAN:
+                condition = lambda: self.agent.current_level().dungeon_number == Level.SOKOBAN
+                level = (Level.SOKOBAN, 4)
 
-        exploration_strategy = (
-            self.agent.exploration.explore1(None, trap_search_offset=1).preempt(self.agent, [
-                self.identify_items_on_altar().every(50),
-                self.dip_for_excalibur().condition(lambda: self.agent.blstats.score > 1400 and
-                                                           self.agent.blstats.experience_level >= 7).every(10),
-            ])
-        )
+            elif self.milestone == Milestone.FIND_GNOMISH_MINES:
+                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES
+                level = (Level.GNOMISH_MINES, 1)
 
-        go_to_strategy = lambda y, x: (
-            exploration_strategy
-            .preempt(self.agent, [
-                self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
-                    self.agent.inventory.gather_items(),
-                    self.identify_items_on_altar(),
-                    self.dip_for_excalibur().condition(lambda: self.agent.blstats.score > 1400 and
-                                                               self.agent.blstats.experience_level >= 7),
+            elif self.milestone == Milestone.FIND_MINETOWN:
+                condition = lambda: self.minetown_level is not None
+                level = (Level.GNOMISH_MINES, 4)  # TODO
+
+            elif self.milestone == Milestone.SOLVE_SOKOBAN:
+                # TODO: fix the condition, monster can destroy doors
+                condition = lambda: self.agent.current_level().key() == (Level.SOKOBAN, 1) and \
+                                    not utils.isin(self.agent.current_level().objects, G.DOOR_CLOSED).any()
+                level = (Level.SOKOBAN, 1)
+
+            elif self.milestone == Milestone.FIND_MINES_END:
+                condition = lambda: self.agent.current_level().key() == (Level.GNOMISH_MINES, 9)  # TODO
+                level = (Level.GNOMISH_MINES, 9)  # TODO
+
+            else:
+                # TODO
+                condition = lambda: False
+                level = (Level.DUNGEONS_OF_DOOM, 100)
+
+            if condition():
+                self.milestone = Milestone(int(self.milestone) + 1)
+                continue
+
+
+            def exploration_strategy(level):
+                return (
+                    Strategy(lambda: self.agent.exploration.explore1(level, trap_search_offset=1,
+                        kick_doors=self.agent.current_level().dungeon_number != Level.GNOMISH_MINES).strategy())
+                    .preempt(self.agent, [
+                        self.identify_items_on_altar().every(100),
+                        self.identify_items_on_altar().condition(
+                            lambda: self.agent.current_level().objects[self.agent.blstats.y,
+                                                                       self.agent.blstats.x] in G.ALTAR),
+                        self.dip_for_excalibur().condition(
+                            lambda: self.agent.blstats.experience_level >= 7).every(10),
+                    ])
+                )
+
+            def go_to_strategy(y, x):
+                return (
+                    exploration_strategy(None)
+                    .preempt(self.agent, [
+                        self.agent.exploration.go_to_strategy(y, x).preempt(self.agent, [
+                            self.agent.inventory.gather_items(),
+                            self.identify_items_on_altar(),
+                            self.dip_for_excalibur().condition(lambda: self.agent.blstats.experience_level >= 7),
+                        ])
+                        .condition(lambda: self._got_artifact or
+                                           not any([alignment == self.agent.character.alignment
+                                                    for _, alignment in self.agent.current_level().altars.items()]))
+                    ])
+                    .until(self.agent, lambda: (self.agent.blstats.y, self.agent.blstats.x) == (y, x))
+                )
+
+            (
+                self.agent.exploration.go_to_level_strategy(*level, go_to_strategy, exploration_strategy(None))
+                .before(exploration_strategy(None))
+                .preempt(self.agent, [
+                    exploration_strategy(0),
+                    exploration_strategy(None)
+                    .until(self.agent, lambda: self.agent.blstats.hitpoints >= 0.8 * self.agent.blstats.max_hitpoints)
                 ])
-            ])
-            .until(self.agent, lambda: (self.agent.blstats.y, self.agent.blstats.x) == (y, x))
-        )
-
-        yield from (
-            self.agent.exploration.go_to_level_strategy(*level, go_to_strategy, exploration_strategy)
-            .before(self.agent.exploration.explore1(None, trap_search_offset=1))
-            .preempt(self.agent, [
-                self.agent.exploration.explore1(0, trap_search_offset=1),
-                self.agent.exploration.explore1(None, trap_search_offset=1)
-                .until(self.agent, lambda: (
-                    (self.agent.blstats.score > 1200) and # or self.agent.blstats.hunger_state >= Hunger.WEAK) and
-                    self.agent.blstats.hitpoints >= 0.8 * self.agent.blstats.max_hitpoints))
-            ])
-        ).strategy()
+                .preempt(self.agent, [
+                    self.agent.exploration.explore_stairs(go_to_strategy, all=True).condition(explore_stairs_condition),
+                ])
+                .until(self.agent, condition)
+            ).run()
 
     def global_strategy(self):
         return (
-            self.current_strategy()
+            self.current_strategy().repeat()
             .preempt(self.agent, [
                 self.solve_sokoban_strategy()
-                .condition(lambda: self.agent.current_level().dungeon_number == Level.SOKOBAN)
+                .condition(lambda: self.milestone == Milestone.SOLVE_SOKOBAN and
+                                   self.agent.current_level().dungeon_number == Level.SOKOBAN)
+            ])
+            .preempt(self.agent, [
+                self.offer_corpses().preempt(self.agent, [
+                    self.agent.eat1().condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                ]),
             ])
             .preempt(self.agent, [
                 self.wait_out_unexpected_state_strategy(),
             ])
             .preempt(self.agent, [
+                self.agent.cure_disease().every(5),
+            ])
+            .preempt(self.agent, [
                 self.agent.eat1().every(5).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_from_inventory().every(5),
-            ]).preempt(self.agent, [
+            ])
+            .preempt(self.agent, [
                 self.agent.fight2(),
-            ]).preempt(self.agent, [
+            ])
+            .preempt(self.agent, [
+                self.agent.engulfed_fight(),
+            ])
+            .preempt(self.agent, [
                 self.agent.emergency_strategy(),
             ])
         )

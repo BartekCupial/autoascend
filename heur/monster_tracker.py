@@ -1,11 +1,17 @@
 import re
 
-import numba as nb
 import numpy as np
 from nle.nethack import actions as A
 
 import utils
 from glyph import C, G
+
+try:
+    import numba as nb
+except ImportError:
+    class nb:
+        b1 = bool
+        njit = lambda *a, **k: (lambda f: f)
 
 
 @nb.njit('optional(b1[:,:])(i2[:,:],i2[:,:],i2[:,:],i4)', cache=True)
@@ -43,22 +49,27 @@ class MonsterTracker:
 
         self._last_glyphs = None
 
+    def on_panic(self):
+        self._last_glyphs = None
+
     def take_all_monsters(self):
         with self.agent.atom_operation():
             self.agent.step(A.Command.WHATIS, iter(['M']))
-            assert not self.agent.popup or self.agent.popup[0] == 'All monsters currently shown on the map:', \
-                   (self.agent.message, self.agent.popup)
+            try:
+                index = self.agent.popup.index('All monsters currently shown on the map:')
+            except IndexError:
+                assert 0, (self.agent.message, self.agent.popup)
             regex = re.compile(r"^<(\d+),(\d+)>  ([\x00-\x7F])  ([a-zA-z-,' ]+)$")
 
             monsters = {}
-            for line in self.agent.popup[1:]:
+            for line in self.agent.popup[index + 1:]:
                 r = regex.search(line)
                 assert r is not None, line
                 x, y, char, name = r.groups()
                 y, x = int(y), int(x) - 1
 
-                char_on_map = self.agent.last_observation['chars'][y, x]
-                assert ord(char) == char_on_map, (char, chr(char_on_map))
+                # char_on_map = self.agent.last_observation['chars'][y, x]
+                # assert ord(char) == char_on_map, (char, chr(char_on_map))
 
                 monsters[y, x] = name
         return monsters

@@ -75,7 +75,7 @@ class ReloadAgent(KeyboardInterrupt):
 
 
 class EnvWrapper:
-    def __init__(self, env, to_skip=0, visualizer_args=dict(), step_limit=None, agent_args={}, interactive=False):
+    def __init__(self, env, to_skip=0, visualizer_args=dict(enable=False), step_limit=None, agent_args={}, interactive=False):
         self.env = env
         self.agent_args = agent_args
         self.interactive = interactive
@@ -90,6 +90,9 @@ class EnvWrapper:
 
         self.draw_walkable = False
         self.draw_seen = False
+        self.draw_shop = False
+
+        self.is_done = False
 
     def main(self):
         self.reset()
@@ -115,6 +118,7 @@ class EnvWrapper:
         self.step_count = 0
         self.end_reason = ''
         self.last_observation = obs
+        self.is_done = False
 
         if self.agent is not None:
             self.render()
@@ -129,7 +133,8 @@ class EnvWrapper:
     def fork(self):
         fork_again = True
         while fork_again:
-            if (pid := fork_with_nethack_env(self.env)) != 0:
+            pid = fork_with_nethack_env(self.env)
+            if pid != 0:
                 # parent
                 print('freezing parent')
                 while 1:
@@ -167,12 +172,15 @@ class EnvWrapper:
                     if self.draw_walkable else contextlib.suppress():
                 with self.debug_tiles(~self.agent.current_level().seen, color=(255, 0, 0, 128)) \
                         if self.draw_seen else contextlib.suppress():
-                    with self.debug_tiles((self.last_observation['specials'] & nh.MG_OBJPILE) > 0,
-                                          color=(0, 255, 255, 128)):
-                        self.visualizer.step(self.last_observation)
-                        if force:
-                            self.visualizer.force_next_frame()
-                        rendered = self.visualizer.render()
+                    with self.debug_tiles(self.agent.current_level().shop, color=(0, 0, 255, 64)) \
+                            if self.draw_shop else contextlib.suppress():
+                        with self.debug_tiles(self.agent.current_level().shop_interior, color=(0, 0, 255, 64)) \
+                                if self.draw_shop else contextlib.suppress():
+                            with self.debug_tiles((self.last_observation['specials'] & nh.MG_OBJPILE) > 0,
+                                                color=(0, 255, 255, 128)):
+                                if force:
+                                    self.visualizer.force_next_frame()
+                                rendered = self.visualizer.render()
 
             if not force and (not self.interactive or not rendered):
                 return
@@ -242,10 +250,18 @@ class EnvWrapper:
 
             if key == b'\x1bOP':  # F1
                 self.draw_walkable = not self.draw_walkable
+                self.visualizer.force_next_frame()
                 self.render()
                 continue
             elif key == b'\x1bOQ':  # F2
                 self.draw_seen = not self.draw_seen
+                self.visualizer.force_next_frame()
+                self.render()
+                continue
+
+            elif key == b'\x1bOR':  # F3
+                self.draw_shop = not self.draw_shop
+                self.visualizer.force_next_frame()
                 self.render()
                 continue
 
@@ -271,6 +287,7 @@ class EnvWrapper:
                 self.print_help()
                 continue
             elif key == 127:  # Backspace
+                self.visualizer.force_next_frame()
                 return None
             else:
                 actions = [a for a in self.env._actions if int(a) == key]
@@ -284,6 +301,10 @@ class EnvWrapper:
 
     def step(self, agent_action):
         if self.visualizer is not None:
+            self.visualizer.step(self.last_observation, repr(chr(int(agent_action))))
+
+            if self.interactive and self.to_skip <= 1:
+                self.visualizer.force_next_frame()
             self.render()
 
             if self.interactive:
@@ -293,12 +314,8 @@ class EnvWrapper:
 
             if self.to_skip > 0:
                 self.to_skip -= 1
-                if self.interactive and self.to_skip == 0:
-                    self.visualizer.force_next_frame()
                 action = None
             else:
-                self.visualizer.force_next_frame()
-                self.render()
                 action = self.get_action()
 
             if action is None:
@@ -317,6 +334,9 @@ class EnvWrapper:
         #     agent_lib.G.assert_map(obs['glyphs'], obs['chars'])
 
         if done:
+            if self.visualizer is not None:
+                self.visualizer.step(self.last_observation, repr(chr(int(agent_action))))
+
             end_reason = bytes(obs['tty_chars'].reshape(-1)).decode().replace('You made the top ten list!', '').split()
             if end_reason[7].startswith('Agent'):
                 self.score = int(end_reason[6])
@@ -337,6 +357,7 @@ class EnvWrapper:
         self.last_observation = obs
 
         if done:
+            self.is_done = True
             if self.visualizer is not None:
                 self.render()
             if self.interactive:
@@ -361,6 +382,8 @@ class EnvWrapper:
             'steps': self.env._steps,
             'turns': self.agent.blstats.time,
             'level_num': len(self.agent.levels),
+            'experience_level': self.agent.blstats.experience_level,
+            'milestone': self.agent.global_logic.milestone,
             'panic_num': len(self.agent.all_panics),
             'character': str(self.agent.character).split()[0],
             'end_reason': self.end_reason,
@@ -371,14 +394,14 @@ class EnvWrapper:
 def prepare_env(args, seed, step_limit=None):
     seed += args.seed
 
-    if args.role is not None:
+    if args.role:
         while 1:
             env = gym.make('NetHackChallenge-v0')
             env.seed(seed, seed)
             obs = env.reset()
             blstats = agent_lib.BLStats(*obs['blstats'])
             character_glyph = obs['glyphs'][blstats.y, blstats.x]
-            if nh.permonst(nh.glyph_to_mon(character_glyph)).mname.startswith(args.role):
+            if any([nh.permonst(nh.glyph_to_mon(character_glyph)).mname.startswith(role) for role in args.role]):
                 break
             seed += 10 ** 9
             env.close()
@@ -389,9 +412,9 @@ def prepare_env(args, seed, step_limit=None):
     visualizer_args = dict(enable=args.mode == 'run' or args.visualize_ends is not None,
                            start_visualize=args.visualize_ends[seed] if args.visualize_ends is not None else None,
                            show=args.mode == 'run',
-                           output_dir=Path('/workspace/vis/') / str(seed),
+                           output_dir=Path('/tmp/vis/') / str(seed),
                            frame_skipping=None if args.visualize_ends is None else 1)
-    env = EnvWrapper(gym.make('NetHackChallenge-v0', no_progress_timeout=200),
+    env = EnvWrapper(gym.make('NetHackChallenge-v0', no_progress_timeout=1000),
                      to_skip=args.skip_to, visualizer_args=visualizer_args,
                      agent_args=dict(panic_on_errors=args.panic_on_errors,
                                      verbose=args.mode == 'run'),
@@ -400,7 +423,7 @@ def prepare_env(args, seed, step_limit=None):
     return env
 
 
-def single_simulation(args, seed_offset, timeout=360):
+def single_simulation(args, seed_offset, timeout=720):
     start_time = time.time()
     env = prepare_env(args, seed_offset)
 
@@ -443,6 +466,8 @@ def run_profiling(args):
         import cProfile, pstats
     elif args.profiler == 'pyinstrument':
         from pyinstrument import Profiler
+    elif args.profiler == 'none':
+        pass
     else:
         assert 0
 
@@ -450,6 +475,8 @@ def run_profiling(args):
         pr = cProfile.Profile()
     elif args.profiler == 'pyinstrument':
         profiler = Profiler()
+    elif args.profiler == 'none':
+        pass
     else:
         assert 0
 
@@ -457,6 +484,8 @@ def run_profiling(args):
         pr.enable()
     elif args.profiler == 'pyinstrument':
         profiler.start()
+    elif args.profiler == 'none':
+        pass
     else:
         assert 0
 
@@ -472,6 +501,8 @@ def run_profiling(args):
         pr.disable()
     elif args.profiler == 'pyinstrument':
         session = profiler.stop()
+    elif args.profiler == 'none':
+        pass
     else:
         assert 0
 
@@ -528,6 +559,8 @@ def run_profiling(args):
         print('Total time:')
         profiler.last_session = session
         print(profiler.output_text(unicode=True, color=True, show_all=True))
+    elif args.profiler == 'none':
+        pass
     else:
         assert 0
 
@@ -560,7 +593,7 @@ def run_simulations(args):
 
             fig.clear()
 
-            histogram_keys = ['score', 'steps', 'turns', 'level_num']
+            histogram_keys = ['score', 'steps', 'turns', 'level_num', 'experience_level', 'milestone']
             spec = fig.add_gridspec(len(histogram_keys) + 2, 2)
 
             for i, k in enumerate(histogram_keys):
@@ -570,12 +603,15 @@ def run_simulations(args):
                     counter = Counter(res[k])
                     sns.barplot(x=[k for k, v in counter.most_common()], y=[v for k, v in counter.most_common()])
                 else:
-                    if k == 'level_num':
+                    if k in ['level_num', 'experience_level', 'milestone']:
                         bins = [b + 0.5 for b in range(max(res[k]) + 1)]
                     else:
                         bins = np.quantile(res[k],
                                            np.linspace(0, 1, min(len(res[k]) // (20 + len(res[k]) // 50) + 2, 50)))
-                    sns.histplot(res[k], bins=bins, kde=np.var(res[k]) > 1e-6, stat='density', ax=ax)
+                    sns.histplot(res[k], bins=bins, stat='density', ax=ax)
+                    if k == 'milestone':
+                        ticks = sorted(set([(int(m), m.name) for m in res[k]]))
+                        plt.xticks(ticks=[t[0] for t in ticks], labels=[t[1] for t in ticks])
 
             ax = fig.add_subplot(spec[:len(histogram_keys) // 2, 1])
             sns.scatterplot(x='turns', y='steps', data=res, ax=ax)
@@ -591,7 +627,7 @@ def run_simulations(args):
             res['race-alignment'] = [f'{r}-{a}' for r, a in zip(res['race'], res['alignment'])]
             sns.violinplot(x='role', y='score', color='white', hue='gender',
                            hue_order=sorted(set(res['gender'])), split=len(set(res['gender'])) == 2,
-                           order=sorted(set(res['role'])), inner='quartile', bw=10 / len(res['role']) ** 0.7,
+                           order=sorted(set(res['role'])), inner='quartile',
                            data=res, ax=ax)
 
             palette = ['#ff7043', '#cc3311', '#ee3377', '#0077bb', '#33bbee', '#009988', '#bbbbbb']
@@ -624,7 +660,7 @@ def run_simulations(args):
         return q.get()
 
     for seed_offset in range(args.episodes):
-        if args.visualize_ends is None or seed_offset in args.visualize_ends:
+        if args.visualize_ends is None or seed_offset in [k % 10 ** 9 for k in args.visualize_ends]:
             refs.append(remote_simulation.remote(args, seed_offset))
 
     count = 0
@@ -690,12 +726,13 @@ def parse_args():
     parser.add_argument('-n', '--episodes', type=int, default=1)
     parser.add_argument('--role', choices=('arc', 'bar', 'cav', 'hea', 'kni',
                                            'mon', 'pri', 'ran', 'rog', 'sam',
-                                           'tou', 'val', 'wiz'))
+                                           'tou', 'val', 'wiz'),
+                        action='append')
     parser.add_argument('--panic-on-errors', action='store_true')
     parser.add_argument('--no-plot', action='store_true')
     parser.add_argument('--visualize-ends', type=Path, default=None,
                         help='Path to json file with dict: seed -> visualization_start_step')
-    parser.add_argument('--profiler', choices=('cProfile', 'pyinstrument'), default='pyinstrument')
+    parser.add_argument('--profiler', choices=('cProfile', 'pyinstrument', 'none'), default='pyinstrument')
 
     args = parser.parse_args()
     if args.seed is None:

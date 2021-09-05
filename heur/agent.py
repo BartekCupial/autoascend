@@ -7,13 +7,14 @@ import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
+import rl_utils
 import utils
 from character import Character
 from exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
 from exploration_logic import ExplorationLogic
 from global_logic import GlobalLogic
-from glyph import MON, C, Hunger, G
-from item import Inventory, Item
+from glyph import MON, C, Hunger, G, SHOP, ALL
+from item import Inventory, Item, flatten_items
 from level import Level
 from monster_tracker import MonsterTracker
 from strategy import Strategy
@@ -23,20 +24,28 @@ BLStats = namedtuple('BLStats',
 
 
 class Agent:
-    def __init__(self, env, seed=0, verbose=False, panic_on_errors=False):
+    def __init__(self, env, seed=0, verbose=False, panic_on_errors=False,
+                 rl_model_to_train=None, rl_model_training_comm=(None, None)):
         self.env = env
         self.verbose = verbose
         self.rng = np.random.RandomState(seed)
         self.panic_on_errors = panic_on_errors
         self.all_panics = []
+        self.rl_model_to_train = rl_model_to_train
+        self.rl_model_training_comm = rl_model_training_comm
 
         self.on_update = []
         self.levels = {}
         self.score = 0
         self.step_count = 0
-        self.message = ''
-        self.popup = []
+        self._observation = None  # this should be used in additional_action_iterator generators
+        # single_{message,popup} should be used in additional_action_itertator generators.
+        # (non-single) message & popup contain cummulated content
+        self.message = self.single_message = ''
+        self.popup = self.single_popup = []
         self._message_history = []
+
+        self._last_pet_seen = 0
 
         self.inventory = Inventory(self)
         self.character = Character(self)
@@ -47,7 +56,7 @@ class Agent:
         self.last_bfs_dis = None
         self.last_bfs_step = None
         self.last_prayer_turn = None
-        self._previous_glyphs = None
+        # self._previous_glyphs = None
         self._last_turn = -1
         self._inactivity_counter = 0
         self._is_updating_state = False
@@ -55,9 +64,20 @@ class Agent:
         self._no_step_calls = False
 
         self.turns_in_atom_operation = None
+        self._atom_operation_allow_update = None
 
         self._is_reading_message_or_popup = False
         self._last_terrain_check = None
+
+        self._init_fight3_model()
+
+    @property
+    def has_pet(self):
+        return (self.blstats.time - self._last_pet_seen) <= 16
+
+    @property
+    def in_atom_operation(self):
+        return self.turns_in_atom_operation is not None
 
     ######## CONVENIENCE FUNCTIONS
 
@@ -74,17 +94,29 @@ class Agent:
             self._no_step_calls = False
 
     @contextlib.contextmanager
-    def atom_operation(self):
+    def atom_operation(self, allow_update=False):
+        assert not self._no_step_calls
         if self.turns_in_atom_operation is not None:
             # already in an atom operation
-            yield
+            old_allow_update = self._atom_operation_allow_update
+            if old_allow_update is None:
+                self._atom_operation_allow_update = allow_update
+            else:
+                assert old_allow_update or not allow_update
+                self._atom_operation_allow_update = old_allow_update and allow_update
+            try:
+                yield
+            finally:
+                self._atom_operation_allow_update = old_allow_update
             return
 
         self.turns_in_atom_operation = 0
+        self._atom_operation_allow_update = allow_update
         try:
             yield
         finally:
             self.turns_in_atom_operation = None
+            self._atom_operation_allow_update = None
 
         self.update_state()
 
@@ -222,8 +254,10 @@ class Agent:
     ######## UPDATE FUNCTIONS
 
     def on_panic(self):
+        self.check_terrain(force=True)
         self.inventory.on_panic()
-        # TODO: monster_tracker panic
+        self.monster_tracker.on_panic()
+        self.update_state()
 
     @staticmethod
     def _find_marker(lines, regex=re.compile(r"(--More--|\(end\)|\(\d+ of \d+\))")):
@@ -258,18 +292,13 @@ class Agent:
             message = message[:-len('--More--')]
 
         # assert '\n' not in message and '\r' not in message
-        if self._is_reading_message_or_popup:
-            message_preffix = self.message + (' ' if self.message else '')
-            popup = self.popup
-        else:
-            message_preffix = ''
-            popup = []
+        popup = []
 
         lines = [bytes(line).decode().replace('\0', ' ').replace('\n', '') for line in obs['tty_chars']]
         marker_pos, marker_type = self._find_marker(lines)
 
         if marker_pos is None:
-            return message_preffix + message, popup, True
+            return message, popup, True
 
         pref = ''
         message_lines_count = 0
@@ -291,7 +320,7 @@ class Agent:
                     elems1 = [s for s in message.split() if s]
                     elems2 = [s for s in pref.split() if s]
                     assert len(elems1) < len(elems2) and elems2[-len(elems1):] == elems1, (elems1, elems2)
-                    return message_preffix + pref, popup, False
+                    return pref, popup, False
                 raise ValueError(f"Message:\n{repr(message)}\ndoesn't match the screen:\n{repr(pref)}")
 
         # cut out popup
@@ -300,7 +329,23 @@ class Agent:
             if l:
                 popup.append(l)
 
-        return message_preffix + message, popup, False
+        return message, popup, False
+
+    def update_message_and_popup(self, obs):
+        if self._is_reading_message_or_popup:
+            message_prefix = self.message + (' ' if self.message else '')
+            popup_prefix = self.popup
+        else:
+            message_prefix = ''
+            popup_prefix = []
+
+        self.single_message, self.single_popup, done = self.get_message_and_popup(obs)
+        self.single_message = self.single_message.strip()
+        self.single_popup = [p.strip() for p in self.single_popup]
+
+        self.message = message_prefix + self.single_message
+        self.popup = popup_prefix + self.single_popup
+        return done
 
     def step(self, action, additional_action_iterator=None):
         if self._no_step_calls:
@@ -320,11 +365,10 @@ class Agent:
         self.update(observation, additional_action_iterator)
 
     def update(self, observation, additional_action_iterator=None):
-        self.message, self.popup, done = self.get_message_and_popup(observation)
+        self._observation = observation
+        done = self.update_message_and_popup(observation)
 
-        self.message = self.message.strip()
-        self.popup = [p.strip() for p in self.popup]
-
+        self._is_reading_message_or_popup = True
         if additional_action_iterator is not None:
             is_next_action = True
             try:
@@ -339,12 +383,14 @@ class Agent:
         # FIXME: self.update_state() won't be called on all states sometimes.
         #        Otherwise there are problems with atomic operations.
         if not done or observation['misc'][2]:
-            self._is_reading_message_or_popup = True
             self.step(A.TextCharacters.SPACE)
             return
 
-        self._is_reading_message_or_popup = False
-        self._message_history.append(self.message)
+        if "You may wish for an object." in self.message:
+            # TODO: wishing strategy
+            # TODO: assume wished item as blessed
+            self.step('b', iter('lessed greased +2 gray dragon scale mail\r'))
+            return
 
         if observation['misc'][1]:  # entering text
             self.step(A.Command.ESC)
@@ -359,14 +405,17 @@ class Agent:
             self.type_text('y')
             return
 
-        should_update = True
+        self._is_reading_message_or_popup = False
+        self._message_history.append(self.message)
 
-        if self.turns_in_atom_operation is not None:
-            should_update = False
-            if any([(self.last_observation[key] != observation[key]).any()
-                    for key in ['glyphs', 'blstats', 'inv_strs', 'inv_letters', 'inv_oclasses', 'inv_glyphs']]):
-                self.turns_in_atom_operation += 1
-            # assert self.turns_in_atom_operation in [0, 1]
+        # should_update = True
+
+        # if self.turns_in_atom_operation is not None:
+        #     should_update = False
+        #     # if any([(self.last_observation[key] != observation[key]).any()
+        #     #         for key in ['glyphs', 'blstats', 'inv_strs', 'inv_letters', 'inv_oclasses', 'inv_glyphs']]):
+        #     #     self.turns_in_atom_operation += 1
+        #     # assert self.turns_in_atom_operation in [0, 1]
 
         self.last_observation = observation
 
@@ -379,22 +428,29 @@ class Agent:
             self._inactivity_counter = 0
         assert self._inactivity_counter < 100, ('turn inactivity', sorted(set(self._message_history[-50:])))
 
-        if should_update:
-            self.update_state()
+        self.update_state(allow_update=self._atom_operation_allow_update or not self.in_atom_operation,
+                          allow_callbacks=not self.in_atom_operation)
 
-    def update_state(self):
+    def update_state(self, allow_update=True, allow_callbacks=True):
+        assert not self._no_step_calls
         if self._is_updating_state:
             return
         self._is_updating_state = True
+        message = self.message
+        popup = self.popup
 
         try:
-            # functions that are allowed to call state unchanging steps
-            self.inventory.update()
-            self.monster_tracker.update()
-            self.check_terrain(force=False)
-            self.update_level()
+            if allow_update:
+                # functions that are allowed to call state unchanging steps
+                for func in [self.character.update, self.inventory.update, self.monster_tracker.update,
+                            partial(self.check_terrain, force=False), self.update_level,
+                            self.global_logic.update]:
+                    func()
+                    self.message = message
+                    self.popup = popup
 
-            self.call_update_functions()
+            if allow_callbacks:
+                self.call_update_functions()
         finally:
             self._is_updating_state = False
 
@@ -407,9 +463,13 @@ class Agent:
             for func in funcs:
                 func()
 
-    def _update_items_on_level(self):
-        # TODO: optimize
+    def _update_level_items(self):
         level = self.current_level()
+
+        level.items[self.blstats.y, self.blstats.x] = self.inventory.items_below_me
+        level.item_count[self.blstats.y, self.blstats.x] = len(self.inventory.items_below_me)
+
+        # TODO: optimize
         ignore_mask = utils.isin(self.glyphs, G.MONS, G.PETS)  # TODO: effects, etc
         item_mask = level.item_count != 0
         mask = item_mask & ~ignore_mask
@@ -422,43 +482,70 @@ class Agent:
                     continue
 
             level.item_disagreement_counter[y, x] += 1
-            if level.item_disagreement_counter[y, x] > 2:
+            if level.item_disagreement_counter[y, x] > 3:
                 level.item_disagreement_counter[y, x] = 0
                 level.items[y, x] = ()
                 level.item_count[y, x] = 0
 
+    def _update_level_shops(self):
+        level = self.current_level()
+
+        shop_type = None
+        matches = re.search(f"Welcome( again)? to [a-zA-Z' ]*({'|'.join(SHOP.name2id.keys())})!", self.message)
+        if matches is not None:
+            shop_name = matches.groups()[1]
+            assert shop_name in SHOP.name2id, shop_name
+            shop_type = SHOP.name2id[shop_name]
+
+        shopkeepers = list(
+            zip(*(utils.isin(self.glyphs, G.SHOPKEEPER) & self.monster_tracker.peaceful_monster_mask).nonzero()))
+        for y, x in shopkeepers:
+            wall_mask = utils.isin(level.objects, G.WALL)
+            entry = ((utils.translate(wall_mask, 1, 0) & utils.translate(wall_mask, -1, 0)) |
+                     (utils.translate(wall_mask, 0, 1) & utils.translate(wall_mask, 0, -1))) & \
+                    level.walkable
+            walkable = level.walkable & ~entry
+            mask = utils.bfs(y, x, walkable=walkable, walkable_diagonally=walkable, can_squeeze=False) != -1
+            mask = utils.dilate(mask, radius=1)
+
+            level.shop[mask] = True
+            if mask[self.blstats.y, self.blstats.x] and shop_type is not None:
+                level.shop_type[mask] = shop_type
+            level.shop_interior[mask & ~utils.dilate(entry, radius=1, with_diagonal=False)] = True
+
     def update_level(self):
-        # this function shouldn't rely self.message and self.popup (because some update functions
-        # can call a few steps and change it)
+        if utils.isin(self.glyphs, G.SWALLOW).any():
+            return
+
+        if utils.any_in(self.glyphs, G.PETS):
+            self._last_pet_seen = self.blstats.time
 
         level = self.current_level()
 
-        level.shop[self.blstats.y, self.blstats.x] = \
-                any((item.shop_status != Item.NOT_SHOP for item in self.inventory.items_below_me))
+        # if self._previous_glyphs is None or (self._previous_glyphs != self.last_observation['glyphs']).any():
+        #     self._previous_glyphs = self.last_observation['glyphs']
 
-        if self._previous_glyphs is None or (self._previous_glyphs != self.last_observation['glyphs']).any():
-            self._previous_glyphs = self.last_observation['glyphs']
+        mask = utils.isin(self.glyphs, G.FLOOR, G.STAIR_UP, G.STAIR_DOWN, G.DOOR_OPENED, G.TRAPS,
+                          G.ALTAR, G.FOUNTAIN)
+        level.walkable[mask] = True
+        level.seen[mask] = True
+        level.objects[mask] = self.glyphs[mask]
 
-            mask = utils.isin(self.glyphs, G.FLOOR, G.CORRIDOR, G.STAIR_UP, G.STAIR_DOWN, G.DOOR_OPENED, G.TRAPS,
-                              G.ALTAR, G.FOUNTAIN)
-            level.walkable[mask] = True
-            level.seen[mask] = True
-            level.objects[mask] = self.glyphs[mask]
+        mask = utils.isin(self.glyphs, G.MONS, G.PETS, G.BODIES, G.OBJECTS, G.STATUES)
+        level.seen[mask] = True
+        level.walkable[mask & (level.objects == -1)] = True
 
-            mask = utils.isin(self.glyphs, G.MONS, G.PETS, G.BODIES, G.OBJECTS, G.STATUES)
-            level.seen[mask] = True
-            level.walkable[mask & ~utils.isin(level.objects, G.STONE)] = True
+        mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS)
+        level.seen[mask] = True
+        level.objects[mask] = self.glyphs[mask]
+        level.walkable[mask] = False
 
-            mask = utils.isin(self.glyphs, G.WALL, G.DOOR_CLOSED, G.BARS)
-            level.seen[mask] = True
-            level.objects[mask] = self.glyphs[mask]
-            level.walkable[mask] = False
+        self._update_level_items()
+        self._update_level_shops()
 
-            self._update_items_on_level()
-
-
-        level.items[self.blstats.y, self.blstats.x] = self.inventory.items_below_me
-        level.item_count[self.blstats.y, self.blstats.x] = len(self.inventory.items_below_me)
+        for y, x in zip(*utils.isin(level.objects, G.ALTAR).nonzero()):
+            if (y, x) not in level.altars:
+                level.altars[y, x] = Character.UNKNOWN
 
         level.was_on[self.blstats.y, self.blstats.x] = True
 
@@ -524,32 +611,51 @@ class Agent:
             if ' eat it? [ynq]' in self.message or \
                     ' eat one? [ynq]' in self.message:
                 self.type_text('y')
-            if "You don't have anything to eat." in self.message:
-                return False
-            self.type_text('y')
-            if "You don't have that object." in self.message:
-                self.step(A.Command.ESC)
-                return False
-        return True
+                return True
+            if "What do you want to eat?" in self.message or \
+                    "You don't have anything to eat." in self.message:
+                raise AgentPanic('no food is lying here')
+            assert 0, self.message
+
+    def is_safe_to_pray(self):
+        return (
+                (self.last_prayer_turn is None and self.blstats.time > 300) or
+                (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > 900)
+        )
 
     def pray(self):
         self.step(A.Command.PRAY)
+        self.last_prayer_turn = self.blstats.time
+        # TODO: return value
         return True
 
-    def open_door(self, y, x=None):
+    def open_door(self, y, x):
         with self.panic_if_position_changes():
             assert self.glyphs[y, x] in G.DOOR_CLOSED
             self.direction(y, x)
+            self.current_level().door_open_count[y, x] += 1
             return self.glyphs[y, x] not in G.DOOR_CLOSED
 
-    def fight(self, y, x=None):
+    def fight(self, y, x):
         with self.panic_if_position_changes():
-            assert self.glyphs[y, x] in G.MONS.union([nh.GLYPH_INVISIBLE])
+            assert self.glyphs[y, x] in G.MONS or self.glyphs[y, x] in G.INVISIBLE_MON or \
+                   self.glyphs[y, x] in G.SWALLOW
             self.direction(y, x)
         return True
 
+    def zap(self, item, direction):
+        with self.atom_operation():
+            self.step(A.Command.ZAP)
+            self.type_text(self.inventory.items.get_letter(item))
+            self.direction(direction)
+        return True
+
     def fire(self, item, direction):
-        # TODO: throwing is not possible if you don't have hands
+        if self.character.prop.polymorph:
+            # TODO: throwing is not possible if you don't have hands
+            # it may be possible depending on creature
+            return False
+
         with self.atom_operation():
             self.step(A.Command.THROW)
             self.type_text(self.inventory.items.get_letter(item))
@@ -780,7 +886,8 @@ class Agent:
                     # TODO: limited range
                     with self.env.debug_tiles([[y, x]], (0, 0, 255, 100)):
                         dir = self.calc_direction(self.blstats.y, self.blstats.x, y, x, allow_nonunit_distance=True)
-                        self.fire(ammo, dir)
+                        if not self.fire(ammo, dir):
+                            return False
                         break
             else:
                 return False
@@ -796,10 +903,13 @@ class Agent:
         ret = []
         for y, x in zip(*mask.nonzero()):
             if (dis[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2] != -1).any():
-                if self.glyphs[y][x] == nh.GLYPH_INVISIBLE:
+                if self.glyphs[y, x] == nh.GLYPH_INVISIBLE or \
+                        not MON.is_monster(self.glyphs[y, x]):  # TODO: some ghost are not visible in glyphs (?)
                     if utils.adjacent((self.blstats.y, self.blstats.x), (y, x)):
                         class dummy_permonst:
-                            mname='unknown'
+                            mname = 'unknown'
+                            mlet = '0'
+
                         ret.append((dis[y][x], y, x, dummy_permonst(), self.glyphs[y][x]))
                 else:
                     ret.append((dis[y][x], y, x, MON.permonst(self.glyphs[y][x]), self.glyphs[y][x]))
@@ -840,6 +950,73 @@ class Agent:
 
         return False
 
+    def _init_fight3_model(self):
+        self._fight3_model = rl_utils.RLModel({
+                'walkable': ((7, 7), bool),
+                'monster_mask': ((7, 7), bool),
+            },
+            [(y, x) for y in [-1, 0, 1] for x in [-1, 0, 1]],
+            train=self.rl_model_to_train == 'fight3',
+            training_comm=self.rl_model_training_comm,
+        )
+
+    @utils.debug_log('fight3')
+    @Strategy.wrap
+    def fight3(self):
+        yielded = False
+        while 1:
+            monsters = self.get_visible_monsters()
+
+            # get only monsters with path to them
+            monsters = [m for m in monsters if m[0] != -1]
+
+            if not monsters or all(dis > 7 for dis, *_ in monsters):
+                if not yielded:
+                    yield False
+                return
+
+            if not yielded:
+                yielded = True
+                yield True
+                self.character.parse_enhance_view()
+
+            if self.wield_best_melee_weapon():
+                continue
+
+            dis = self.bfs()
+            level = self.current_level()
+            walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
+                       ~self.monster_tracker.peaceful_monster_mask & \
+                       ~utils.isin(level.objects, G.TRAPS)
+
+            radius_y = self._fight3_model.observation_def['walkable'][0][0] // 2
+            radius_x = self._fight3_model.observation_def['walkable'][0][1] // 2
+            y1, y2, x1, x2 = self.blstats.y - radius_y, self.blstats.y + radius_y + 1, \
+                             self.blstats.x - radius_x, self.blstats.x + radius_x + 1
+
+            observation = {
+                'walkable': utils.slice_with_padding(walkable, y1, y2, x1, x2),
+                'monster_mask': utils.slice_with_padding(self.monster_tracker.monster_mask, y1, y2, x1, x2),
+            }
+            actions = [(y, x) for y, x in self._fight3_model.action_space
+                       if 0 <= self.blstats.y + y < C.SIZE_Y and 0 <= self.blstats.x + x < C.SIZE_X \
+                               and level.walkable[self.blstats.y + y, self.blstats.x + x]]
+
+            off_y, off_x = self._fight3_model.choose_action(observation, actions)
+
+            y, x = self.blstats.y + off_y, self.blstats.x + off_x
+            if self.monster_tracker.monster_mask[y, x]:
+                # TODO: copied from `flight1`
+                mon_glyph = self.glyphs[y, x]
+                try:
+                    self.fight(y, x)
+                finally:  # TODO: what if panic?
+                    if nh.glyph_is_body(self.glyphs[y, x]) \
+                            and self.glyphs[y, x] - nh.GLYPH_BODY_OFF == nh.glyph_to_mon(mon_glyph):
+                        self.current_level().corpse_age[y, x] = self.blstats.time
+            else:
+                self.move(y, x)
+
     @utils.debug_log('fight2')
     @Strategy.wrap
     def fight2(self):
@@ -848,14 +1025,15 @@ class Agent:
         wait_counter = 0
         while 1:
             monsters = self.get_visible_monsters()
-
-            only_ranged_slow_monsters = all([mon.mname in fight_heur.ONLY_RANGED_SLOW_MONSTERS
-                                             for _, _, _, mon, _ in monsters])
+            only_ranged_slow_monsters = all([monster[3].mname in fight_heur.ONLY_RANGED_SLOW_MONSTERS
+                                             and not fight_heur.consider_melee_only_ranged_if_hp_full(self, monster)
+                                             for monster in monsters])
 
             dis = self.bfs()
 
             if not monsters or all(dis > 7 for dis, *_ in monsters) or \
-                    (only_ranged_slow_monsters and not self.inventory.get_ranged_combinations() and np.sum(dis != -1) > 1):
+                    (only_ranged_slow_monsters and not self.inventory.get_ranged_combinations() and np.sum(
+                        dis != -1) > 1):
                 if wait_counter:
                     self.search()
                     wait_counter -= 1
@@ -869,39 +1047,54 @@ class Agent:
                 yield True
                 self.character.parse_enhance_view()
 
-            priority, actions = fight_heur.build_priority_map(self)
-            mask = ~np.isnan(priority)
-            assert mask.any()
-            priority[~mask] = np.min(priority[mask]) - 1
+            move_priority_heatmap, actions = fight_heur.get_priorities(self)
 
-            adjacent = dis == 1
+            best_move_score, best_x, best_y, possible_move_to = self._fight2_get_best_move(dis, move_priority_heatmap)
 
-            assert np.sum(adjacent) <= 8, np.sum(adjacent)
-            possible_move_to = []
-            if adjacent.any():
-                possible_move_to = list(zip(*np.nonzero((priority == np.max(priority[adjacent])) & adjacent)))
-            assert len(possible_move_to) <= 8
-
-            best_y, best_x = None, None
-            if possible_move_to:
-                best_y, best_x = possible_move_to[self.rng.randint(0, len(possible_move_to))]
-                if priority[best_y, best_x] < -2 ** 15:
-                    best_y, best_x = None, None
-
-            best_move_score = None
-            if best_y is not None:
-                best_move_score = priority[best_y, best_x]
-            best_action = max(actions) if actions else None
+            if self.character.prop.polymorph:
+                actions = list(filter(lambda x: x[1] != 'ranged', actions))
+            best_action = max(actions, key=lambda x: x[0]) if actions else None
 
             if best_y is None and best_action is None:
                 assert 0, 'No possible action available during fight2'
 
-            priority[~mask] = float('nan')
-            with self.env.debug_tiles(priority, color='turbo', is_heatmap=True):
-                actions_str = '|'.join([f'{a[0]}-{a[1][0]}-{a[2]},{a[3]}' for a in sorted(actions)])
+            with self.env.debug_tiles(move_priority_heatmap, color='turbo', is_heatmap=True):
+                def action_str(a):
+                    if a[1] == 'pickup':
+                        return f'{a[0]}{a[1][0]}:{len(a[2])}'
+                    elif a[1] == 'zap':
+                        wand = a[4]
+                        letter = self.inventory.items.get_letter(wand)
+                        return f'{a[0]}z{letter}:{a[2]},{a[3]}'
+                    else:
+                        return f'{a[0]}{a[1][0]}:{a[2]},{a[3]}'
+
+                actions_str = '|'.join([action_str(a) for a in sorted(actions, key=lambda x: x[0])])
                 with self.env.debug_log(actions_str + f'|{best_move_score}|' + '|'.join(map(str, possible_move_to))):
                     wait_counter = self._fight2_perform_action(best_action, best_move_score, best_x, best_y,
                                                                wait_counter)
+
+    def _fight2_get_best_move(self, dis, move_priority_heatmap):
+        mask = ~np.isnan(move_priority_heatmap)
+        assert mask.any()
+        move_priority_heatmap[~mask] = np.min(move_priority_heatmap[mask]) - 1
+        adjacent = dis == 1
+        assert np.sum(adjacent) <= 8, np.sum(adjacent)
+        possible_move_to = []
+        if adjacent.any():
+            possible_move_to = list(
+                zip(*np.nonzero((move_priority_heatmap == np.max(move_priority_heatmap[adjacent])) & adjacent)))
+        assert len(possible_move_to) <= 8
+        best_y, best_x = None, None
+        if possible_move_to:
+            best_y, best_x = possible_move_to[self.rng.randint(0, len(possible_move_to))]
+            if move_priority_heatmap[best_y, best_x] < -2 ** 15:
+                best_y, best_x = None, None
+        best_move_score = None
+        if best_y is not None:
+            best_move_score = move_priority_heatmap[best_y, best_x]
+        move_priority_heatmap[~mask] = float('nan')
+        return best_move_score, best_x, best_y, possible_move_to
 
     def _fight2_perform_action(self, best_action, best_move_score, best_x, best_y, wait_counter):
         if best_action is None or (best_y is not None and best_move_score > best_action[0]):
@@ -911,8 +1104,8 @@ class Agent:
                 wait_counter = 5
                 return wait_counter
         else:
-            _, action_name, target_y, target_x, monster = best_action
-            if action_name == 'melee':
+            if best_action[1] == 'melee':
+                _, _, target_y, target_x, monster = best_action
                 if self.wield_best_melee_weapon():
                     return wait_counter
                 with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
@@ -923,13 +1116,10 @@ class Agent:
                         self._track_hunted_corpse(monster, target_x, target_y)
                     wait_counter = 0
                     return wait_counter
-            elif action_name == 'ranged':
+            elif best_action[1] == 'ranged':
+                _, _, target_y, target_x, monster = best_action
                 launcher, ammo = self.inventory.get_best_ranged_set()
                 assert ammo is not None
-                # if ammo is None:
-                #     assert len(self.inventory.get_ranged_combinations()) == 0
-                #     self.wield_best_melee_weapon()
-                #     return wait_counter
                 if launcher is not None and not launcher.equipped:
                     if self.inventory.wield(launcher):
                         return wait_counter
@@ -937,10 +1127,24 @@ class Agent:
                     dir = self.calc_direction(self.blstats.y, self.blstats.x, target_y, target_x,
                                               allow_nonunit_distance=True)
                     try:
-                        self.fire(ammo, dir)
+                        assert self.fire(ammo, dir)
                     finally:
                         self._track_hunted_corpse(monster, target_x, target_y)
                     return wait_counter
+            elif best_action[1] == 'zap':
+                _, _, dy, dx, wand, targeted_monsters = best_action
+                dir = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx,
+                                          allow_nonunit_distance=True)
+
+                with self.env.debug_tiles([[my, mx] for my, mx, _ in targeted_monsters],
+                                          (255, 0, 255, 255), mode='frame'):
+                    self.zap(wand, dir)
+                    for my, mx, monster in targeted_monsters:
+                        self._track_hunted_corpse(monster, mx, my)
+
+            elif best_action[1] == 'pickup':
+                _, _, items_to_pickup = best_action
+                self.inventory.pickup(items_to_pickup)
             else:
                 raise NotImplementedError()
         return wait_counter
@@ -950,6 +1154,18 @@ class Agent:
         if nh.glyph_is_body(self.glyphs[target_y, target_x]) \
                 and self.glyphs[target_y, target_x] - nh.GLYPH_BODY_OFF == nh.glyph_to_mon(mon_glyph):
             self.current_level().corpse_age[target_y, target_x] = self.blstats.time
+
+    @utils.debug_log('engulfed_fight')
+    @Strategy.wrap
+    def engulfed_fight(self):
+        if not utils.any_in(self.glyphs, G.SWALLOW):
+            yield False
+        yield True
+        while True:
+            mask = utils.isin(self.glyphs, G.SWALLOW)
+            if not mask.any():
+                break
+            assert self.fight(*list(zip(*mask.nonzero()))[0])
 
     @utils.debug_log('fight1')
     @Strategy.wrap
@@ -1030,10 +1246,14 @@ class Agent:
         level = self.current_level()
 
         if self.character.race == Character.ORC:
-            flags = MON.M1_ACID
+            flags1 = MON.M1_ACID
         else:
-            flags = MON.M1_ACID | MON.M1_POIS
-        editable_bodies = [b for b in G.BODIES if MON.permonst(b).mflags1 & flags == 0]
+            flags1 = MON.M1_ACID | MON.M1_POIS
+        flags2 = MON.M2_WERE
+
+        editable_bodies = [b for b in G.BODIES if MON.permonst(b).mflags1 & flags1 == 0 and \
+                                                  MON.permonst(b).mflags2 & flags2 == 0 and \
+                                                  ord(MON.permonst(b).mlet) != MON.S_COCKATRICE]
         mask = utils.isin(self.glyphs, editable_bodies) & \
                ((self.blstats.time - level.corpse_age <= 50) |
                 utils.isin(self.glyphs, [MON.body_from_name('lizard'), MON.body_from_name('lichen')]))
@@ -1063,14 +1283,12 @@ class Agent:
     def emergency_strategy(self):
         # TODO: to refactor
         if (
-                ((self.last_prayer_turn is None and self.blstats.time > 300) or
-                 (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > 900)) and
+                self.is_safe_to_pray() and
                 (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
                  * self.blstats.max_hitpoints or self.blstats.hitpoints < 6
                  or self.blstats.hunger_state >= Hunger.FAINTING)
         ):
             yield True
-            self.last_prayer_turn = self.blstats.time
             self.pray()
             return
 
@@ -1095,39 +1313,80 @@ class Agent:
 
         yield False
 
-    ######## HIGH-LEVEL STRATEGIES
-
+    @utils.debug_log('eat_from_inventory')
     @Strategy.wrap
     def eat_from_inventory(self):
-        if not (self.blstats.hunger_state >= Hunger.WEAK and any(
-                map(lambda item: item.category == nh.FOOD_CLASS,
-                    self.inventory.items))):
+        if self.blstats.hunger_state < Hunger.HUNGRY:
             yield False
-        yield True
-        with self.atom_operation():
-            self.step(A.Command.EAT)
-            while re.search('There (is|are)[a-zA-z0-9 ]* here; eat (it|one)\?', self.message):
-                self.type_text('n')
-            for item in self.inventory.items:
-                if item.category == nh.FOOD_CLASS:
-                    self.type_text(self.inventory.items.get_letter(item))
-                    break
-            else:
-                assert 0
+        for item in flatten_items(self.inventory.items):
+            if item.category == nh.FOOD_CLASS and \
+                    item.objs[0].name != 'sprig of wolfsbane' and \
+                    (not item.is_corpse() or
+                     item.monster_id in [MON.from_name(n) - nh.GLYPH_MON_OFF for n in ['lizard', 'lichen']]):
+                yield True
+                self.inventory.eat(item)
+                return
+        yield False
+
+    @utils.debug_log('cure_disease')
+    @Strategy.wrap
+    def cure_disease(self):
+        if self.character.is_lycanthrope:
+            # spring of wolfbane
+            for item in flatten_items(self.inventory.items):
+                if item.objs[0].name == 'sprig of wolfsbane':
+                    yield True
+                    self.inventory.eat(item)
+                    return
+
+            # holy water
+            for item in flatten_items(self.inventory.items):
+                if item.objs[0].name == 'water' and item.status == Item.BLESSED:
+                    yield True
+                    self.inventory.quaff(item)
+                    return
+
+            # pray
+            if self.is_safe_to_pray():
+                yield True
+                self.pray()
+                return
+
+        yield False
 
     ####### MAIN
 
-    def main(self):
-        self.step(A.Command.ESC)
-        self.current_level().stair_destination[self.blstats.y, self.blstats.x] = \
-            ((Level.PLANE, 1), (None, None))  # TODO: check level num
-        self.character.parse()
-        self.character.parse_enhance_view()
-        self.step(A.Command.AUTOPICKUP)
-        if 'Autopickup: ON' in self.message:
-            self.step(A.Command.AUTOPICKUP)
+    def handle_exception(self, exc):
+        if isinstance(exc, (KeyboardInterrupt, AgentFinished)):
+            raise exc
+        if isinstance(exc, BaseException):
+            if not isinstance(exc, AgentPanic) and not self.panic_on_errors:
+                raise exc
+            self.all_panics.append(exc)
+            if self.verbose:
+                print(f'PANIC!!!! : {exc}')
 
+    def main(self):
         try:
+            init_finished = False
+            try:
+                with self.atom_operation():
+                    self.step(A.Command.ESC)
+                    self.step(A.Command.ESC)
+
+                    self.current_level().stair_destination[self.blstats.y, self.blstats.x] = \
+                        ((Level.PLANE, 1), (None, None))  # TODO: check level num
+                    self.character.parse()
+                    self.character.parse_enhance_view()
+                    self.step(A.Command.AUTOPICKUP)
+                    if 'Autopickup: ON' in self.message:
+                        self.step(A.Command.AUTOPICKUP)
+                    init_finished = True
+            except BaseException as e:
+                self.handle_exception(e)
+
+            assert init_finished
+
             last_step = self.step_count
             inactivity_counter = 0
             while 1:
@@ -1137,29 +1396,15 @@ class Agent:
                 assert inactivity_counter < 5, ('cyclic panic', sorted({p.args[0] for p in self.all_panics[-5:]}))
 
                 try:
+                    self.step(A.Command.ESC)
+                    self.step(A.Command.ESC)
                     self.on_panic()
-
-                    self.step(A.Command.ESC)
-                    self.step(A.Command.ESC)
-                    self.check_terrain(force=True)
 
                     last_step = self.step_count
 
                     self.global_logic.global_strategy().run()
                     assert 0
-                except AgentPanic as e:
-                    self.all_panics.append(e)
-                    if self.verbose:
-                        print(f'PANIC!!!! : {e}')
-                except AgentFinished:
-                    raise
-                except KeyboardInterrupt:
-                    raise
                 except BaseException as e:
-                    if not self.panic_on_errors:
-                        raise
-                    self.all_panics.append(e)
-                    if self.verbose:
-                        print(f'PANIC!!!! : {e}')
+                    self.handle_exception(e)
         except AgentFinished:
             pass
