@@ -11,6 +11,7 @@ from multiprocessing import Pool
 from nle import nethack as nh
 
 from agent import Agent
+from character import Character
 
 
 class AgentStepTimeout(KeyboardInterrupt):
@@ -24,6 +25,7 @@ class EnvWrapper:
         self.step_count = -1
         self.visualizer = None
         self._finished = False
+        self.agent = None
 
     def reset(self):
         obs = self.env.reset()
@@ -35,6 +37,8 @@ class EnvWrapper:
         obs, reward, done, info = self.env.step(nh.actions.ACTIONS.index(action))
         self.score += reward
         self.step_count += 1
+        if self.score > 2500:
+            done = True
         return obs, reward, done, info
 
     def debug_tiles(self, *args, **kwargs):
@@ -66,8 +70,8 @@ class EnvWrapper:
         timer_thread.start()
         try:
             self.reset()
-            agent = Agent(self)
-            agent.main()
+            self.agent = Agent(self)
+            self.agent.main()
         finally:
             self._finished = True
             timer_thread.join()
