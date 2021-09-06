@@ -38,7 +38,13 @@ class EnvWrapper:
         self.score += reward
         self.step_count += 1
         if self.score > 2500:
-            done = True
+            for _ in range(5):
+                action = nh.actions.ACTIONS.index(nh.actions.Command.ESC)
+                obs, reward, done, info = self.env.step(action)
+            for c in '#quit\ry':
+                action = nh.actions.ACTIONS.index(ord(c))
+                obs, reward, done, info = self.env.step(action)
+            assert done
         return obs, reward, done, info
 
     def debug_tiles(self, *args, **kwargs):
@@ -80,7 +86,7 @@ class EnvWrapper:
 def single_game(i):
     orig_env = aicrowd_gym.make('NetHackChallenge-v0')
     if orig_env is None:
-        print(f'Run {i} not available')
+        print(f'Run {i} not available', file=sys.stderr)
         return
 
     try:
@@ -88,11 +94,11 @@ def single_game(i):
         try:
             env.main()
         except BaseException as e:
-            print(''.join(traceback.format_exception(None, e, e.__traceback__)))
+            print(''.join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
     finally:
         orig_env.close()
 
-    print(f'Run {i} finished with score {env.score}')
+    print(f'Run {i} finished with score {env.score}', file=sys.stderr)
 
     return env.score
 
@@ -105,8 +111,8 @@ if __name__ == "__main__":
     with Pool(NUM_THREADS) as pool:
         scores = list(pool.map(single_game, range(NUM_ASSESSMENTS)))
 
-    print('scores  :', scores)
-    print('duration:', time.time() - start_time)
-    print('len     :', len(scores))
-    print('median  :', np.median(scores))
-    print('mean    :', np.mean(scores))
+    print('scores  :', scores, file=sys.stderr)
+    print('duration:', time.time() - start_time, file=sys.stderr)
+    print('len     :', len(scores), file=sys.stderr)
+    print('median  :', np.median(scores), file=sys.stderr)
+    print('mean    :', np.mean(scores), file=sys.stderr)
