@@ -1,5 +1,6 @@
 import contextlib
 import re
+from stats_logger import StatsLogger
 from collections import namedtuple
 from functools import partial
 
@@ -69,8 +70,11 @@ class Agent:
 
         self._is_reading_message_or_popup = False
         self._last_terrain_check = None
+        self._forbidden_engrave_position = (-1, -1)
 
         self._init_fight3_model()
+
+        self.stats_logger = StatsLogger()
 
     @property
     def has_pet(self):
@@ -389,15 +393,15 @@ class Agent:
             self.step(A.TextCharacters.SPACE)
             return
 
-        if "You may wish for an object." in self.message:
-            # TODO: wishing strategy
-            # TODO: assume wished item as blessed
-            self.step('b', iter('lessed greased +2 gray dragon scale mail\r'))
-            return
-
         if observation['misc'][1]:  # entering text
-            self.step(A.Command.ESC)
-            return
+            if "You may wish for an object." in self.message:
+                # TODO: wishing strategy
+                # TODO: assume wished item as blessed
+                self.step('b', iter('lessed greased +2 gray dragon scale mail\r'))
+                return
+            else:
+                self.step(A.Command.ESC)
+                return
 
         if 'Where do you want to be teleported?' in self.message:
             # TODO: teleport control
@@ -446,8 +450,8 @@ class Agent:
             if allow_update:
                 # functions that are allowed to call state unchanging steps
                 for func in [self.character.update, self.inventory.update, self.monster_tracker.update,
-                            partial(self.check_terrain, force=False), self.update_level,
-                            self.global_logic.update]:
+                             partial(self.check_terrain, force=False), self.update_level,
+                             self.global_logic.update]:
                     func()
                     self.message = message
                     self.popup = popup
@@ -735,6 +739,40 @@ class Agent:
                 raise AgentPanic(f'agent position do not match after "move": '
                                  f'expected ({expected_y}, {expected_x}), got ({self.blstats.y}, {self.blstats.x})')
 
+    def can_engrave(self):
+        return (self.blstats.y, self.blstats.x) != self._forbidden_engrave_position
+
+    def engrave(self, text):
+        assert '\r' not in text
+        ret = False
+
+        def gen():
+            nonlocal ret
+            if 'What do you want to write with?' not in self.single_message:
+                self._forbidden_engrave_position = (self.blstats.y, self.blstats.x)
+                yield A.Command.ESC
+                return
+            yield '-'
+            if 'Do you want to add to the current engraving?' in self.single_message:
+                yield 'n'
+            while self._observation['misc'][2]:
+                yield ' '
+            if 'What do you want to write in the dust here?' not in self.single_message:
+                self._forbidden_engrave_position = (self.blstats.y, self.blstats.x)
+                yield A.Command.ESC
+                return
+            yield from text
+            yield '\r'
+            ret = True
+
+        with self.atom_operation():
+            self.step(A.Command.ENGRAVE, gen())
+            self.inventory.get_items_below_me()
+
+        if ret and text.lower() == 'elbereth':
+            self.stats_logger.log_event('elbereth_write')
+        return ret
+
     ######## NON-TRIVIAL HELPERS
 
     def neighbors(self, y, x, shuffle=True, diagonal=True):
@@ -836,7 +874,8 @@ class Agent:
         if (self.blstats.y, self.blstats.x) == (y, x):
             return True
 
-    def go_to(self, y, x, stop_one_before=False, max_steps=None, debug_tiles_args=None, callback=lambda: False, fast=False):
+    def go_to(self, y, x, stop_one_before=False, max_steps=None,
+              debug_tiles_args=None, callback=lambda: False, fast=False):
         assert not stop_one_before or (self.blstats.y != y or self.blstats.x != x)
         assert max_steps is None or not fast
 
@@ -847,7 +886,7 @@ class Agent:
                 if dis[ny, nx] != -1 and (best_p is None or dis[best_p] > dis[ny, nx]):
                     best_p = ny, nx
             if best_p is None:
-                assert 0, 'no achievable neighbor'
+                assert 0, 'no reachable neighbor'
             y, x = best_p
             stop_one_before = False
 
@@ -924,7 +963,7 @@ class Agent:
                 return False
 
     def get_visible_monsters(self):
-        """ Returns list of tuples (distance, y, x, monster)
+        """ Returns list of tuples (distance, y, x, permonst, monster_glyph)
         """
         mask = self.monster_tracker.monster_mask & ~self.monster_tracker.peaceful_monster_mask
         if not mask.any():
@@ -983,9 +1022,9 @@ class Agent:
 
     def _init_fight3_model(self):
         self._fight3_model = rl_utils.RLModel({
-                'walkable': ((7, 7), bool),
-                'monster_mask': ((7, 7), bool),
-            },
+            'walkable': ((7, 7), bool),
+            'monster_mask': ((7, 7), bool),
+        },
             [(y, x) for y in [-1, 0, 1] for x in [-1, 0, 1]],
             train=self.rl_model_to_train == 'fight3',
             training_comm=self.rl_model_training_comm,
@@ -1031,7 +1070,7 @@ class Agent:
             }
             actions = [(y, x) for y, x in self._fight3_model.action_space
                        if 0 <= self.blstats.y + y < C.SIZE_Y and 0 <= self.blstats.x + x < C.SIZE_X \
-                               and level.walkable[self.blstats.y + y, self.blstats.x + x]]
+                       and level.walkable[self.blstats.y + y, self.blstats.x + x]]
 
             off_y, off_x = self._fight3_model.choose_action(observation, actions)
 
@@ -1097,6 +1136,10 @@ class Agent:
                         wand = a[4]
                         letter = self.inventory.items.get_letter(wand)
                         return f'{a[0]}z{letter}:{a[2]},{a[3]}'
+                    elif a[1] == 'elbereth':
+                        return f'{a[0]:.1f}e'
+                    elif a[1] == 'wait':
+                        return f'{a[0]}w'
                     else:
                         return f'{a[0]}{a[1][0]}:{a[2]},{a[3]}'
 
@@ -1107,7 +1150,8 @@ class Agent:
 
     def _fight2_get_best_move(self, dis, move_priority_heatmap):
         mask = ~np.isnan(move_priority_heatmap)
-        assert mask.any()
+        if not mask.any():
+            return None, None, None, []
         move_priority_heatmap[~mask] = np.min(move_priority_heatmap[mask]) - 1
         adjacent = dis == 1
         assert np.sum(adjacent) <= 8, np.sum(adjacent)
@@ -1115,6 +1159,7 @@ class Agent:
         if adjacent.any():
             possible_move_to = list(
                 zip(*np.nonzero((move_priority_heatmap == np.max(move_priority_heatmap[adjacent])) & adjacent)))
+            possible_move_to = [(y, x) for y, x in possible_move_to if mask[y, x]]
         assert len(possible_move_to) <= 8
         best_y, best_x = None, None
         if possible_move_to:
@@ -1125,6 +1170,8 @@ class Agent:
         if best_y is not None:
             best_move_score = move_priority_heatmap[best_y, best_x]
         move_priority_heatmap[~mask] = float('nan')
+        if best_y is not None:
+            assert mask[best_y, best_x]
         return best_move_score, best_x, best_y, possible_move_to
 
     def _fight2_perform_action(self, best_action, best_move_score, best_x, best_y, wait_counter):
@@ -1162,6 +1209,14 @@ class Agent:
                     finally:
                         self._track_hunted_corpse(monster, target_x, target_y)
                     return wait_counter
+            elif best_action[1] == 'elbereth':
+                assert self.inventory.engraving_below_me.lower() != 'elbereth'
+                self.engrave("Elbereth")
+                return wait_counter
+            elif best_action[1] == 'wait':
+                assert self.inventory.engraving_below_me.lower() == 'elbereth'
+                self.search()
+                return wait_counter
             elif best_action[1] == 'zap':
                 _, _, dy, dx, wand, targeted_monsters = best_action
                 dir = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx,
@@ -1312,7 +1367,6 @@ class Agent:
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
-        # TODO: to refactor
         if (
                 self.is_safe_to_pray() and
                 (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
@@ -1323,24 +1377,26 @@ class Agent:
             self.pray()
             return
 
+        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                 item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
                  or self.blstats.hitpoints < 8 or self.blstats.hunger_state >= Hunger.FAINTING) and
-                len([s for s in map(lambda x: bytes(x).decode(), self.last_observation['inv_strs'])
-                     if 'potion of healing' in s or 'potion of extra healing' in s
-                        or 'potion of full healing' in s]) > 0
+                items
         ):
             yield True
-            with self.atom_operation():
-                self.type_text('q')
-                for letter, s in zip(self.last_observation['inv_letters'],
-                                     map(lambda x: bytes(x).decode(), self.last_observation['inv_strs'])):
-                    if 'potion of healing' in s or 'potion of extra healing' in s or 'potion of full healing' in s:
-                        self.type_text(chr(letter))
-                        break
-                else:
-                    assert 0
+            self.inventory.quaff(items[0])
             return
+
+        # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
+        #         (self.blstats.hitpoints < 1 / 5 * self.blstats.max_hitpoints or self.blstats.hitpoints < 5):
+        #     yield True
+        #     self.engrave('Elbereth')
+        #     for _ in range(8):
+        #         if self.inventory.engraving_below_me.lower() != 'elbereth':
+        #             break
+        #         self.direction('.')
+        #     return
 
         yield False
 

@@ -55,7 +55,6 @@ class ItemPriority(ItemPriorityBase):
             if item.is_container() and item.status in [Item.UNCURSED, Item.BLESSED] and item.objs[0].desc == 'bag':
                 bag = item  # TODO: select the best
                 add_item(bag)
-                break
 
         for allow_unknown_status in [False, True]:
             item = self.agent.inventory.get_best_melee_weapon(items=forced_items + items,
@@ -107,14 +106,16 @@ class ItemPriority(ItemPriorityBase):
                                  nh.TOOL_CLASS]:
                 if (not isinstance(item.objs[0], O.Container) or item.objs[0].desc == 'bag') and \
                         not item.is_possible_container():
-                    add_item(item, to_bag=True)
+                    to_bag = O.from_name('cancellation', nh.WAND_CLASS) not in item.objs
+                    add_item(item, to_bag=to_bag)
 
         categories = [nh.WEAPON_CLASS, nh.ARMOR_CLASS, nh.TOOL_CLASS, nh.FOOD_CLASS, nh.GEM_CLASS, nh.AMULET_CLASS,
                       nh.RING_CLASS, nh.POTION_CLASS, nh.SCROLL_CLASS, nh.SPBOOK_CLASS, nh.WAND_CLASS]
         for item in sorted(items, key=lambda i: i.unit_weight(with_content=False)):
             if item.category in categories and not isinstance(item.objs[0], O.Container) and not item.is_corpse():
                 if item.status == Item.UNKNOWN:
-                    add_item(item, to_bag=True)
+                    to_bag = O.from_name('cancellation', nh.WAND_CLASS) not in item.objs
+                    add_item(item, to_bag=to_bag)
 
         r = {None: [ret_inv.get(item, 0) for item in items]}
         if bag is not None:
@@ -463,6 +464,21 @@ class GlobalLogic:
                 else:
                     break
 
+    @utils.debug_log('follow_guard')
+    @Strategy.wrap
+    def follow_guard(self):
+        if not utils.isin(self.agent.glyphs, G.GUARD).any():
+            yield False
+
+        ys, xs = utils.isin(self.agent.glyphs, G.GUARD).nonzero()
+        y, x = ys[0], xs[0]
+
+        if utils.adjacent((y, x), (self.agent.blstats.y, self.agent.blstats.x)):
+            yield False
+
+        yield True
+        self.agent.go_to(y, x, stop_one_before=True)
+
     @Strategy.wrap
     def current_strategy(self):
         yield True
@@ -572,6 +588,9 @@ class GlobalLogic:
             .preempt(self.agent, [
                 self.agent.eat1().every(5).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_from_inventory().every(5),
+            ])
+            .preempt(self.agent, [
+                self.follow_guard(),
             ])
             .preempt(self.agent, [
                 self.agent.fight2(),

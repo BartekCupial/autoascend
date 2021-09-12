@@ -571,6 +571,8 @@ class ItemManager:
 
         count = int({'a': 1, 'an': 1, 'the': 1}.get(count, count))
         status = {'': Item.UNKNOWN, 'cursed': Item.CURSED, 'uncursed': Item.UNCURSED, 'blessed': Item.BLESSED}[status]
+        if uses is not None and status == Item.UNKNOWN:
+            status = Item.UNCURSED
         modifier = None if not modifier else {'+': 1, '-': -1}[modifier[0]] * int(modifier[1:])
         monster_id = None
 
@@ -1074,12 +1076,14 @@ class Inventory:
         self._previous_blstats = None
         self.items_below_me = None
         self.letters_below_me = None
+        self.engraving_below_me = None
 
         self.skip_engrave_counter = 0
 
     def on_panic(self):
         self.items_below_me = None
         self.letters_below_me = None
+        self.engraving_below_me = None
         self._previous_blstats = None
 
         self.item_manager.on_panic()
@@ -1093,16 +1097,18 @@ class Inventory:
                 (self._previous_blstats.y, self._previous_blstats.x, \
                  self._previous_blstats.level_number, self._previous_blstats.dungeon_number) != \
                 (self.agent.blstats.y, self.agent.blstats.x, \
-                 self.agent.blstats.level_number, self.agent.blstats.dungeon_number):
-            assume_appropriate_message = self._previous_blstats is not None
+                 self.agent.blstats.level_number, self.agent.blstats.dungeon_number) or \
+                (self.engraving_below_me is None or self.engraving_below_me.lower() == 'elbereth'):
+            assume_appropriate_message = self._previous_blstats is not None and not self.engraving_below_me
 
             self._previous_blstats = self.agent.blstats
             self.items_below_me = None
             self.letters_below_me = None
+            self.engraving_below_me = None
 
             self.get_items_below_me(assume_appropriate_message=assume_appropriate_message)
 
-        assert self.items_below_me is not None and self.letters_below_me is not None
+        assert self.items_below_me is not None and self.letters_below_me is not None and self.engraving_below_me is not None
 
     @contextlib.contextmanager
     def panic_if_items_below_me_change(self):
@@ -1203,15 +1209,19 @@ class Inventory:
         with self.agent.atom_operation():
             self.agent.step(A.Command.TAKEOFF)
 
+            is_take_off_message = lambda: \
+                    'You finish taking off ' in self.agent.message or \
+                    'You were wearing ' in self.agent.message or \
+                    'You feel that monsters no longer have difficulty pinpointing your location.' in self.agent.message
+
             if len(equipped_armors) > 1:
+                if is_take_off_message():
+                    raise AgentPanic('env did not ask for the item to takeoff')
                 assert 'What do you want to take off?' in self.agent.message, self.agent.message
                 self.agent.type_text(letter)
             if 'It is cursed.' in self.agent.message or 'They are cursed.' in self.agent.message:
                 return False
-            assert 'You finish taking off ' in self.agent.message or \
-                   'You were wearing ' in self.agent.message or \
-                   'You feel that monsters no longer have difficulty pinpointing your location.' in self.agent.message \
-                , self.agent.message
+            assert is_take_off_message(), self.agent.message
 
         return True
 
@@ -1442,6 +1452,14 @@ class Inventory:
                     # LOOK is necessary even when 'Things that are here' popup is present for some very rare cases
                     self.agent.step(A.Command.LOOK)
 
+                if 'Something is ' in self.agent.message and 'You read: "' in self.agent.message:
+                    index = self.agent.message.index('You read: "') + len('You read: "')
+                    assert '"' in self.agent.message[index:]
+                    engraving = self.agent.message[index : index + self.agent.message[index:].index('"')]
+                    self.engraving_below_me = engraving
+                else:
+                    self.engraving_below_me = ''
+
                 if 'Things that are here:' not in self.agent.popup and 'There is ' not in '\n'.join(self.agent.popup):
                     if 'You see no objects here.' in self.agent.message:
                         items = []
@@ -1465,7 +1483,8 @@ class Inventory:
                                 ' solidly fixed to the floor.' in self.agent.message or \
                                 'You read:' in self.agent.message or \
                                 "You don't see anything in here to pick up." in self.agent.message or \
-                                'You cannot reach the ground.' in self.agent.message:
+                                'You cannot reach the ground.' in self.agent.message or \
+                                "You don't feel anything in here to pick up." in self.agent.message:
                             items = []
                             letters = []
                         else:
