@@ -37,15 +37,15 @@ class EnvWrapper:
         obs, reward, done, info = self.env.step(nh.actions.ACTIONS.index(action))
         self.score += reward
         self.step_count += 1
-        if self.score > 3000 and \
-                self.agent.character.role not in [self.agent.character.VALKYRIE, self.agent.character.KNIGHT]:
-            for _ in range(5):
-                action = nh.actions.ACTIONS.index(nh.actions.Command.ESC)
-                obs, reward, done, info = self.env.step(action)
-            for c in '#quit\ry':
-                action = nh.actions.ACTIONS.index(ord(c))
-                obs, reward, done, info = self.env.step(action)
-            assert done
+        # if self.score > 3000 and \
+        #         self.agent.character.role not in [self.agent.character.VALKYRIE, self.agent.character.KNIGHT]:
+        #     for _ in range(5):
+        #         action = nh.actions.ACTIONS.index(nh.actions.Command.ESC)
+        #         obs, reward, done, info = self.env.step(action)
+        #     for c in '#quit\ry':
+        #         action = nh.actions.ACTIONS.index(ord(c))
+        #         obs, reward, done, info = self.env.step(action)
+        #     assert done
         return obs, reward, done, info
 
     def debug_tiles(self, *args, **kwargs):
