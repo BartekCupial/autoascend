@@ -1,11 +1,14 @@
-import numpy as np
 import re
+
+import cv2
+import numpy as np
 from nle import nethack as nh
 from nle.nethack import actions as A
 
 import utils
 from character import Character
-from glyph import G, C
+from exceptions import AgentPanic
+from glyph import G, C, SS
 from level import Level
 from strategy import Strategy
 
@@ -420,8 +423,80 @@ class ExplorationLogic:
             open_visit_search(search_prio_limit)
             .preempt(self.agent, [
                 self.agent.inventory.gather_items(),
+                self.untrap_traps().every(10),
             ])
             .preempt(self.agent, [
                 self.search_neighbors_for_traps(trap_search_offset),
             ])
         )
+
+    def worth_untrapping(self, trap_y, trap_x):
+        walkable = self.agent.current_level().walkable
+        last_walkable = None
+        walkable_changes = 0
+        for dy, dx in [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]:
+            y, x = trap_y - dy, trap_x - dx
+            if not 0 <= y <= walkable.shape[0] or not 0 <= x <= walkable.shape[1]:
+                w = False
+            else:
+                w = walkable[y, x]
+            if last_walkable is not None and last_walkable != w:
+                walkable_changes += 1
+            last_walkable = w
+        assert walkable_changes % 2 == 0
+        return walkable_changes >= 4
+
+    @utils.debug_log('untrap_traps')
+    @Strategy.wrap
+    def untrap_traps(self):
+        if self.agent.blstats.hitpoints < 10 or (self.agent.blstats.hitpoints / self.agent.blstats.max_hitpoints) < 0.5:
+            # not enough HP to risk untrapping at all
+            yield False
+            return
+
+        untrappable_traps = [SS.S_web, SS.S_bear_trap, SS.S_land_mine, SS.S_dart_trap, SS.S_arrow_trap]
+        # TODO: consider strategy for SS.S_pit, SS.S_spiked_pit
+        level = self.agent.current_level()
+        trap_mask = utils.isin(level.objects, untrappable_traps)
+
+        if not trap_mask.any():
+            yield False
+            return
+
+        trap_locations = list(zip(*trap_mask.nonzero()))
+        trap_locations = [loc for loc in trap_locations if self.worth_untrapping(*loc)]
+
+        if not trap_locations:
+            yield False
+            return
+
+        trap_mask = cv2.dilate(trap_mask.astype(np.uint8), kernel=np.ones((3, 3))).astype(bool)
+        bfs = self.agent.bfs()
+        trap_mask[self.agent.blstats.y, self.agent.blstats.x] = 0  # don't try to untrap when standing on it
+        trap_mask &= (bfs >= 0)
+        if not trap_mask.any():
+            yield False
+            return
+        trap_mask &= bfs == bfs[trap_mask].min()
+        assert trap_mask.any()
+
+        if not trap_mask.any():
+            yield False
+            return
+        yield True
+
+        closest_y, closest_x = trap_mask.nonzero()
+        target_y, target_x = closest_y[0], closest_x[0]
+        assert target_y != self.agent.blstats.y or target_x != self.agent.blstats.x
+
+        self.agent.go_to(target_y, target_x, debug_tiles_args=dict(color=(255, 120, 0), is_path=True))
+        for trap_y, trap_x in trap_locations:
+            if utils.adjacent((self.agent.blstats.y, self.agent.blstats.x), (trap_y, trap_x)):
+                trap_glyph = level.objects[trap_y, trap_x]
+                if trap_glyph not in untrappable_traps:
+                    raise AgentPanic('a trap is no longer there')
+                # assert level.objects[trap_y, trap_x] == trap_glyph
+                if trap_y == self.agent.blstats.y and trap_x == self.agent.blstats.x:
+                    continue
+                self.agent.untrap(trap_y, trap_x)
+                self.agent.check_terrain(force=True)

@@ -34,6 +34,14 @@ def find_equivalent_item(item, iterable):
     assert 0, (item, iterable)
 
 
+def check_if_triggered_container_trap(message):
+    return ('A cloud of ' in message and ' gas billows from ' in message) or \
+            'Suddenly you are frozen in place!' in message or \
+            'A tower of flame bursts from ' in message or \
+            'You are jolted by a surge of electricity!' in message or \
+            'But luckily ' in message
+
+
 class Item:
     # beatitude
     UNKNOWN = 0
@@ -241,6 +249,20 @@ class Item:
     def wand_charges_left(self, item):
         assert item.is_wand()
 
+    def is_offensive_usable_wand(self):
+        if len(self.objs) != 1:
+            return False
+        if not self.is_ray_wand():
+            return False
+        if self.uses == 'no charges':
+            # TODO: is it right ?
+            return False
+        if self.objs[0] == O.from_name('sleep', nh.WAND_CLASS):
+            return False
+        if self.objs[0] == O.from_name('digging', nh.WAND_CLASS):
+            return False
+        return True
+
     ######## FOOD
 
     def is_food(self):
@@ -268,6 +290,13 @@ class Item:
         return False
 
     ######## CONTAINER
+
+    def is_chest(self):
+        if self.is_unambiguous() and self.object.name == 'bag of tricks':
+            return False
+        assert self.is_possible_container() or self.is_container(), self.objs
+        assert isinstance(self.objs[0], O.Container), self.objs
+        return self.objs[0].desc != 'bag'
 
     def is_container(self):
         # bag of tricks is not considered to be a container.
@@ -423,14 +452,22 @@ class ItemManager:
 
     def get_item_from_text(self, text, category=None, glyph=None, *, position):
         # position acts as a container identifier if the container is not called. If the item is in inventory set it to None
-        # TODO: when blind, it may not work as expected, e.g. "a shield", "a gem", "a potion", etc
 
         if self.agent.character.prop.hallu:
             glyph = None
 
-        objs, glyphs, count, status, modifier, *args = \
-            self.parse_text(text, category, glyph)
-        category = O.get_category(objs[0])
+        try:
+            objs, glyphs, count, status, modifier, *args = \
+                self.parse_text(text, category, glyph)
+            category = O.get_category(objs[0])
+        except:
+            # TODO: when blind, it may not work as expected, e.g. "a shield", "a gem", "a potion", etc
+            if self.agent.character.prop.blind:
+                obj = O.from_name('unknown')
+                glyphs = O.possible_glyphs_from_object(obj)
+                return Item([obj], glyphs, text=text)
+            raise
+
 
         possibilities_from_glyphs = set.union(*(set(self.possible_objects_from_glyph(glyph)) for glyph in glyphs))
         objs = [o for o in objs if o in possibilities_from_glyphs]
@@ -440,7 +477,7 @@ class ItemManager:
         if status == Item.UNKNOWN and (
                 self.agent.character.role == Character.PRIEST or
                 (modifier is not None and category not in [nh.ARMOR_CLASS, nh.RING_CLASS])):
-            # TODO; oc_charged, amulets of yendor
+            # TODO: amulets of yendor
             status = Item.UNCURSED
 
         old_objs = None
@@ -477,6 +514,11 @@ class ItemManager:
                 if len(item.glyphs) == 1 and item.glyphs[0] not in self._is_not_bag_of_tricks:
                     self._is_not_bag_of_tricks.add(item.glyphs[0])
                     self.update_possible_objects(item)
+
+
+        # FIXME: it gives a better score. Implement it in item equipping
+        if item.status == Item.UNKNOWN:
+            item.status = Item.UNCURSED
 
         return item
 
@@ -531,7 +573,7 @@ class ItemManager:
             r'( ([+-]\d+))? '
             r"([a-zA-z0-9-!'# ]+)"
             r'( \(([0-9]+:[0-9]+|no charge)\))?'
-            r'( \(([a-zA-Z0-9; ]+(, flickering|, glimmering)?[a-zA-Z0-9; ]*)\))?'
+            r'( \(([a-zA-Z0-9; ]+(, flickering|, gleaming)?[a-zA-Z0-9; ]*)\))?'
             r'( \((for sale|unpaid), (\d+ aum, )?((\d+)[a-zA-Z- ]+|no charge)\))?'
             r'$',
             text)
@@ -571,7 +613,8 @@ class ItemManager:
 
         count = int({'a': 1, 'an': 1, 'the': 1}.get(count, count))
         status = {'': Item.UNKNOWN, 'cursed': Item.CURSED, 'uncursed': Item.UNCURSED, 'blessed': Item.BLESSED}[status]
-        if uses is not None and status == Item.UNKNOWN:
+        # TODO: should be uses -- but the score is better this way
+        if uses and status == Item.UNKNOWN:
             status = Item.UNCURSED
         modifier = None if not modifier else {'+': 1, '-': -1}[modifier[0]] * int(modifier[1:])
         monster_id = None
@@ -962,10 +1005,13 @@ class InventoryItems:
         if force:
             self._recheck_containers = True
 
-        if force or self._previous_inv_strs is None or (self.agent.last_observation['inv_strs'] != self._previous_inv_strs).any():
+        if force or self._previous_inv_strs is None or \
+                (self.agent.last_observation['inv_strs'] != self._previous_inv_strs).any():
             self._clear()
             self._previous_inv_strs = self.agent.last_observation['inv_strs']
 
+            # For some reasons sometime the inventory entries in last_observation may be duplicated
+            iterable = set()
             for item_name, category, glyph, letter in zip(
                     self.agent.last_observation['inv_strs'],
                     self.agent.last_observation['inv_oclasses'],
@@ -975,6 +1021,13 @@ class InventoryItems:
                 letter = chr(letter)
                 if not item_name:
                     continue
+                iterable.add((item_name, category, glyph, letter))
+            iterable = sorted(iterable, key=lambda x: x[-1])
+
+            assert len(iterable) == len(set(map(lambda x: x[-1], iterable))), \
+                   'letters in inventory are not unique'
+
+            for item_name, category, glyph, letter in iterable:
                 item = self.agent.inventory.item_manager.get_item_from_text(item_name, category=category,
                         glyph=glyph if not nh.glyph_is_body(glyph) and not nh.glyph_is_statue(glyph) else None,
                         position=None)
@@ -994,7 +1047,7 @@ class InventoryItems:
                         (O.Armor,               O.ARM_SHIRT,  'shirt'),
                     ]:
                         if isinstance(item.objs[0], types) and (sub is None or sub == item.objs[0].sub):
-                            assert getattr(self, name) is None
+                            assert getattr(self, name) is None, ((name, getattr(self, name), item), str(self), iterable)
                             setattr(self, name, item)
                             break
 
@@ -1192,7 +1245,8 @@ class Inventory:
             assert 'What do you want to wear?' in self.agent.message, self.agent.message
             self.agent.type_text(letter)
             assert 'You finish your dressing maneuver.' in self.agent.message or \
-                   'You are now wearing ' in self.agent.message, self.agent.message
+                   'You are now wearing ' in self.agent.message or \
+                   'Your foot is trapped!' in self.agent.message, self.agent.message
 
         return True
 
@@ -1239,6 +1293,7 @@ class Inventory:
                 raise AgentPanic('some items from the container vanished')
             if 'You carefully open ' in self.agent.single_message or 'You open ' in self.agent.single_message:
                 yield ' '
+            assert 'You have no free hand.' not in self.agent.single_message, 'TODO: handle it'
             assert 'Do what with ' in self.agent.single_popup[0]
             if items_to_put and items_to_take:
                 yield 'r'
@@ -1263,6 +1318,10 @@ class Inventory:
                 assert 'Take out what?' in self.agent.single_popup[0]
                 yield from self._select_items_in_popup(items_to_take, items_to_take_counts)
 
+                if 'You have ' in self.agent.single_message and ' removing ' in self.agent.single_message and \
+                        'Continue? [ynq] (q)' in self.agent.single_message:
+                    yield 'y'
+
         with self.agent.atom_operation():
             # TODO: refactor: the same fragment is in check_container_content
             if container in self.items.all_items:
@@ -1274,6 +1333,8 @@ class Inventory:
                 while True:
                     assert 'Loot which containers?' not in self.agent.popup, self.agent.popup
                     assert 'Loot in what direction?' not in self.agent.message
+                    if "You don't find anything here to loot." in self.agent.message:
+                        raise AgentPanic('no container to loot')
                     r = re.findall(r'There is ([a-zA-z0-9# ]+) here\, loot it\? \[ynq\] \(q\)', self.agent.message)
                     assert len(r) == 1, self.agent.message
                     text = r[0]
@@ -1317,15 +1378,19 @@ class Inventory:
                 yield A.Command.ESC
                 return
 
-            if ('A cloud of ' in self.agent.single_message and ' gas billows from ' in self.agent.single_message) or \
-                    'Suddenly you are frozen in place!' in self.agent.single_message or \
-                    'A tower of flame bursts from ' in self.agent.single_message or \
-                    'You are jolted by a surge of electricity!' in self.agent.single_message or \
-                    'But luckily ' in self.agent.single_message:
+            if check_if_triggered_container_trap(self.agent.single_message):
+                self.agent.stats_logger.log_event('triggered_undetected_trap')
                 raise AgentPanic('triggered trap while looting')
 
-            if 'You have no hands!' in self.agent.single_message:
+            if 'You have no hands!' in self.agent.single_message or \
+                    'You have no free hand.' in self.agent.single_message:
                 return
+
+            if ' vanished!' in self.agent.message:
+                raise AgentPanic('some items from the container vanished')
+
+            if 'cat' in self.agent.message and ' inside the box is ' in self.agent.message:
+                raise AgentPanic('encountered a cat in a box')
 
             assert self.agent.single_popup, (self.agent.single_message)
             if '\no - ' not in '\n'.join(self.agent.single_popup):
@@ -1377,6 +1442,8 @@ class Inventory:
             else:
                 self.agent.step(A.Command.LOOT)
                 while True:
+                    if "You don't find anything here to loot." in self.agent.message:
+                        raise AgentPanic('no container below me')
                     assert 'Loot which containers?' not in self.agent.popup, self.agent.popup
                     assert 'There is ' in self.agent.message and ', loot it?' in self.agent.message, self.agent.message
                     r = re.findall(r'There is ([a-zA-z0-9# ]+) here\, loot it\? \[ynq\] \(q\)', self.agent.message)
@@ -1437,6 +1504,7 @@ class Inventory:
                     break
 
                 if not items:
+                    yield '\r'
                     return
 
             yield ' '
@@ -1661,6 +1729,21 @@ class Inventory:
 
     def eat(self, item, quaff=False, smart=True):
         if smart:
+            if not quaff and item in self.items_below_me:
+                with self.agent.atom_operation():
+                    self.agent.step(A.Command.EAT)
+                    while '; eat it? [ynq]' in self.agent.message or \
+                            '; eat one? [ynq]' in self.agent.message:
+                        if f'{item.text} here; eat it? [ynq]' in self.agent.message or \
+                                f'{item.text} here; eat one? [ynq]' in self.agent.message:
+                            self.agent.type_text('y')
+                            return True
+                        self.agent.type_text('n')
+                    # if "What do you want to eat?" in self.agent.message or \
+                    #         "You don't have anything to eat." in self.agent.message:
+                    raise AgentPanic('no such food is lying here')
+                    assert 0, self.agent.message
+
             # TODO: eat directly from ground if possible
             item = self.move_to_inventory(item)
 
@@ -1716,7 +1799,7 @@ class Inventory:
             return best_item, best_dps
         return best_item
 
-    def get_ranged_combinations(self, items=None, throwing=True, allow_best_melee=False,
+    def get_ranged_combinations(self, items=None, throwing=True, allow_best_melee=False, allow_wielded_melee=False,
                                 allow_unknown_status=False, additional_ammo=[]):
         if items is None:
             items = self.items
@@ -1740,12 +1823,17 @@ class Inventory:
             best_melee_weapon = None
             if not allow_best_melee:
                 best_melee_weapon = self.get_best_melee_weapon()
+            wielded_melee_weapon = None
+            if not allow_wielded_melee:
+                wielded_melee_weapon = self.items.main_hand
             valid_combinations.extend([(None, i) for i in items
-                                       if i.is_thrown_projectile() and i != best_melee_weapon])
+                                       if i.is_thrown_projectile()
+                                       and i != best_melee_weapon and i != wielded_melee_weapon])
 
         return valid_combinations
 
     def get_best_ranged_set(self, items=None, *, throwing=True, allow_best_melee=False,
+                            allow_wielded_melee=False,
                             return_dps=False, allow_unknown_status=False, additional_ammo=[]):
         if items is None:
             items = self.items
@@ -1753,7 +1841,7 @@ class Inventory:
 
         best_launcher, best_ammo = None, None
         best_dps = -float('inf')
-        for launcher, ammo in self.get_ranged_combinations(items, throwing, allow_best_melee,
+        for launcher, ammo in self.get_ranged_combinations(items, throwing, allow_best_melee, allow_wielded_melee,
                                                            allow_unknown_status, additional_ammo):
             to_hit, dmg = self.agent.character.get_ranged_bonus(launcher, ammo)
             dps = utils.calc_dps(to_hit, dmg)
@@ -1804,8 +1892,8 @@ class Inventory:
             .before(self.wear_best_stuff())
             .before(self.wand_engrave_identify())
             .before(self.go_to_unchecked_containers())
-            .before(self.go_to_item_to_pickup()
-                    .before(self.check_items()).repeat().every(5)
+            .before(self.check_items()
+                    .before(self.go_to_item_to_pickup()).repeat().every(5)
                     .preempt(self.agent, [
                         self.pickup_and_drop_items(),
                         self.check_containers(),
@@ -1985,6 +2073,9 @@ class Inventory:
     @utils.debug_log('inventory.wand_engrave_identify')
     @Strategy.wrap
     def wand_engrave_identify(self):
+        if self.agent.character.prop.polymorph:
+            yield False  # TODO: only for handless monsters (which cannot write)
+
         self.skip_engrave_counter -= 1
         if self.agent.character.prop.blind or self.skip_engrave_counter > 0:
             yield False
@@ -2041,10 +2132,13 @@ class Inventory:
             return self.agent.single_message
 
         self.agent.step(A.Command.LOOK)
-        if 'written' in msg() or 'engraved' in msg() or 'see' not in msg() or 'read' not in msg():
+        if msg() != 'You see no objects here.':
             return None
+        # if 'written' in msg() or 'engraved' in msg() or 'see' not in msg() or 'read' in msg():
+        #     return None
 
         skip_engraving = [False]
+
 
         def action_generator():
             assert smsg().startswith('What do you want to write with?'), smsg()
@@ -2118,9 +2212,9 @@ class Inventory:
         if skip_engraving[0]:
             return None
 
-        if 'Do you want to add to the current engraving' in msg():
+        if 'Do you want to add to the current engraving' in smsg():
             self.agent.type_text('q')
-            assert msg().strip() == 'Never mind.', msg()
+            assert smsg().strip() == 'Never mind.', smsg()
 
         return possible_wand_types
 
@@ -2232,8 +2326,11 @@ class Inventory:
                 if not yielded:
                     yielded = True
                     yield True
+                if item.is_chest() and not (item.is_unambiguous() and item.object.name == 'ice box'):
+                    fail_msg = self.agent.untrap_container_below_me()
+                    if fail_msg is not None and check_if_triggered_container_trap(fail_msg):
+                        raise AgentPanic('triggered trap while looting')
                 self.check_container_content(item)
-
         if not yielded:
             yield False
 
@@ -2274,14 +2371,14 @@ class Inventory:
             yield False
         yield True
 
-        for i, c in zip(items, counts):
+        for (i, _), c in sorted(zip(items.items(), counts), key=lambda x: dis[x[0][1]]):
             if c != 0:
                 target_y, target_x = items[i]
                 break
         else:
             assert 0
 
-        with self.agent.env.debug_tiles(mask, color=(255, 0, 0, 128)):
+        with self.agent.env.debug_tiles([(y, x) for _, (y, x) in items.items()], color=(255, 0, 0, 128)):
             self.agent.go_to(target_y, target_x, debug_tiles_args=dict(color=(255, 0, 255), is_path=True))
 
     @utils.debug_log('inventory.pickup_and_drop_items')

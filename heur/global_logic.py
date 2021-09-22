@@ -104,9 +104,10 @@ class ItemPriority(ItemPriorityBase):
         for item in sorted(items, key=lambda i: i.unit_weight(with_content=False)):
             if item.category in [nh.POTION_CLASS, nh.RING_CLASS, nh.AMULET_CLASS, nh.WAND_CLASS, nh.SCROLL_CLASS,
                                  nh.TOOL_CLASS]:
-                if (not isinstance(item.objs[0], O.Container) or item.objs[0].desc == 'bag') and \
+                if (not isinstance(item.objs[0], O.Container) or not item.is_chest()) and \
                         not item.is_possible_container():
-                    to_bag = O.from_name('cancellation', nh.WAND_CLASS) not in item.objs
+                    to_bag = O.from_name('cancellation', nh.WAND_CLASS) not in item.objs and \
+                             not item.is_offensive_usable_wand()
                     add_item(item, to_bag=to_bag)
 
         categories = [nh.WEAPON_CLASS, nh.ARMOR_CLASS, nh.TOOL_CLASS, nh.FOOD_CLASS, nh.GEM_CLASS, nh.AMULET_CLASS,
@@ -114,7 +115,8 @@ class ItemPriority(ItemPriorityBase):
         for item in sorted(items, key=lambda i: i.unit_weight(with_content=False)):
             if item.category in categories and not isinstance(item.objs[0], O.Container) and not item.is_corpse():
                 if item.status == Item.UNKNOWN:
-                    to_bag = O.from_name('cancellation', nh.WAND_CLASS) not in item.objs
+                    to_bag = O.from_name('cancellation', nh.WAND_CLASS) not in item.objs and \
+                             not item.is_offensive_usable_wand()
                     add_item(item, to_bag=to_bag)
 
         r = {None: [ret_inv.get(item, 0) for item in items]}
@@ -174,6 +176,8 @@ class GlobalLogic:
 
         def push_bolder(ty, tx, dy, dx):
             while 1:
+                if self.agent.bfs()[ty, tx] == -1:
+                    return False
                 self.agent.go_to(ty, tx, debug_tiles_args=dict(color=(255, 255, 255), is_path=True))
                 with self.agent.atom_operation():
                     direction = self.agent.calc_direction(ty, tx, ty + dy, tx + dx)
@@ -199,9 +203,9 @@ class GlobalLogic:
                                 self.agent.step(A.Command.APPLY)
                                 self.agent.type_text(self.agent.inventory.items.get_letter(pickaxe))
                                 self.agent.direction(direction)
-                            return
+                            return True
                 else:
-                    return
+                    return True
 
                 # TODO: not sure what to do
                 self.agent.exploration.explore1(None).run()
@@ -254,7 +258,8 @@ class GlobalLogic:
 
                                 self.agent.go_to(vy, vx, callback=clear_neighbors)
 
-                    push_bolder(ty, tx, dy, dx)
+                    if not push_bolder(ty, tx, dy, dx):
+                        continue
 
                     possible_mimics = set()
                     last_resort_move = None
@@ -293,7 +298,9 @@ class GlobalLogic:
                     push_bolder(ty, tx, dy, dx)
                     continue
 
-            assert 0, 'sakomap unsolvable'
+            self.agent.stats_logger.log_event('sokoban_dropped')
+            self.milestone = Milestone(int(self.milestone) + 1)
+            raise AgentPanic('sokomap unsolvable')
 
     @Strategy.wrap
     def wait_out_unexpected_state_strategy(self):
@@ -455,6 +462,8 @@ class GlobalLogic:
                                 self._got_artifact = True
                                 self.agent.inventory.get_items_below_me()
                                 return
+                            if 'So this is how you repay loyalty?' in self.agent.message:
+                                raise AgentPanic('pet sacrified')
                             assert 'Your sacrifice is consumed in a flash of light' in self.agent.message or \
                                 'Your sacrifice is consumed in a burst of flame' in self.agent.message or \
                                 ('The blood covers the altar!' in self.agent.message and \
@@ -576,7 +585,7 @@ class GlobalLogic:
             ])
             .preempt(self.agent, [
                 self.offer_corpses().preempt(self.agent, [
-                    self.agent.eat1().condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                    self.agent.eat_corpses_from_ground().condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 ]),
             ])
             .preempt(self.agent, [
@@ -586,7 +595,8 @@ class GlobalLogic:
                 self.agent.cure_disease().every(5),
             ])
             .preempt(self.agent, [
-                self.agent.eat1().every(5).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                self.agent.eat_corpses_from_ground(only_below_me=True).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
+                self.agent.eat_corpses_from_ground().every(5).condition(lambda: self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY),
                 self.agent.eat_from_inventory().every(5),
             ])
             .preempt(self.agent, [
