@@ -38,7 +38,7 @@ class EnvWrapper:
         self.score += reward
         self.step_count += 1
         if self.score > 4000:
-            if self.agent.character.role not in [self.agent.character.VALKYRIE]:
+            if self.agent.character.role not in []:#self.agent.character.VALKYRIE]:
                 for _ in range(5):
                     action = nh.actions.ACTIONS.index(nh.actions.Command.ESC)
                     obs, reward, done, info = self.env.step(action)
