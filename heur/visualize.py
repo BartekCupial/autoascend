@@ -404,11 +404,14 @@ class Visualizer:
         i += 2
 
         stats = list(self.env.agent.stats_logger.get_stats_dict().items())
-        _put_text(ret, ' | '.join(f'{k}={v}' for k, v in stats[:3]),
-                  (0, i * FONT_SIZE), color=(100, 100, 100))
+        for j in range((len(stats) + 2) // 3):
+            _put_text(ret, ' | '.join(f'{k}={v}' for k, v in stats[j * 3: (j + 1) * 3]),
+                      (0, i * FONT_SIZE), color=(100, 100, 100))
+            i += 1
         i += 1
-        _put_text(ret, ' | '.join(f'{k}={v}' for k, v in stats[3:]),
-                  (0, i * FONT_SIZE), color=(100, 100, 100))
+
+        monsters = [(dis, y, x, mon.mname) for dis, y, x, mon, _ in self.env.agent.get_visible_monsters()]
+        _put_text(ret, 'Monsters: ' + str(monsters), (0, i * FONT_SIZE))
 
         _draw_frame(ret)
         return ret
@@ -593,6 +596,7 @@ class Visualizer:
         return vis
 
     def save_end_history(self):
+        print('SAVING', self.output_dir)
         for i, render in enumerate(list(self.renders_history)):
             render = render[..., ::-1]
             out_path = self.output_dir / (str(i).rjust(5, '0') + '.jpg')

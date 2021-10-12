@@ -317,6 +317,21 @@ class ExplorationLogic:
             prio = np.zeros((C.SIZE_Y, C.SIZE_X), np.float32)
             prio[:] = -1
             prio -= level.search_count ** 2 * 2
+
+            counts = level.search_count[level.search_count > 0]
+            search_diff = 0
+            if len(counts):
+                search_diff = np.max(counts) - np.quantile(counts, 0.3)
+                self.agent.stats_logger.log_max_value('search_diff', search_diff)
+
+            if search_diff > 400 and self.agent.blstats.hitpoints == self.agent.blstats.max_hitpoints\
+                    and level.search_count[self.agent.blstats.y, self.agent.blstats.x] == np.max(counts):
+                self.agent.stats_logger.log_event('allow_walk_traps')
+                self.agent._allow_walking_through_traps_turn = self.agent._last_turn
+                if search_diff > 500:
+                    self.agent.stats_logger.log_event('allow_attack_all')
+                    self.agent._allow_attack_all_turn = self.agent._last_turn
+
             # is_on_corridor = utils.isin(level.objects, G.CORRIDOR)
             is_on_door = utils.isin(level.objects, G.DOORS)
 
@@ -436,7 +451,7 @@ class ExplorationLogic:
         walkable_changes = 0
         for dy, dx in [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]:
             y, x = trap_y - dy, trap_x - dx
-            if not 0 <= y <= walkable.shape[0] or not 0 <= x <= walkable.shape[1]:
+            if not 0 <= y < walkable.shape[0] or not 0 <= x < walkable.shape[1]:
                 w = False
             else:
                 w = walkable[y, x]

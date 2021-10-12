@@ -1,3 +1,4 @@
+import json
 import contextlib
 import re
 from collections import namedtuple, Counter
@@ -8,7 +9,7 @@ import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
 
-import rl_utils
+import fight_heur
 import utils
 from character import Character
 from exceptions import AgentPanic, AgentFinished, AgentChangeStrategy
@@ -22,6 +23,8 @@ from strategy import Strategy
 
 BLStats = namedtuple('BLStats',
                      'x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number prop_mask')
+
+RL_CONTEXT_SIZE = 7
 
 
 class Agent:
@@ -73,7 +76,12 @@ class Agent:
         self._last_terrain_check = None
         self._forbidden_engrave_position = (-1, -1)
 
-        self._init_fight3_model()
+        # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
+        self._allow_walking_through_traps_turn = -float('inf')
+        self._allow_attack_all_turn = -float('inf')
+
+        # uncomment to use RL-based fight decisions
+        # self._init_fight2_model()
 
         self.stats_logger = StatsLogger()
 
@@ -435,6 +443,12 @@ class Agent:
         self.blstats = BLStats(*self.last_observation['blstats'])
         self.glyphs = self.last_observation['glyphs']
 
+        self.stats_logger.log_cumulative_value('max_turns_on_position',
+            key=(self.current_level().dungeon_number,
+                self.current_level().level_number,
+                self.blstats.y, self.blstats.x),
+            value=self.blstats.time - self._last_turn)
+
         self._inactivity_counter += 1
         if self._last_turn != self.blstats.time:
             self._last_turn = self.blstats.time
@@ -690,6 +704,8 @@ class Agent:
                     (' trap here.' in self.message or ' field here.' in self.message) and \
                     ('trap?' in self.message or 'field?' in self.message):
                 self.type_text('n')
+            if 'You cannot disable this trap.' in self.single_message:
+                return
             assert 'Check it for traps?' in self.single_message, self.single_message
             self.type_text('y')
             if self.message.startswith('You find no traps on the'):
@@ -818,7 +834,7 @@ class Agent:
                                  f'expected ({expected_y}, {expected_x}), got ({self.blstats.y}, {self.blstats.x})')
 
     def can_engrave(self):
-        if self.agent.character.prop.polymorph:
+        if self.character.prop.polymorph:
             return False  # TODO: only for handless monsters (which cannot write)
         return (self.blstats.y, self.blstats.x) != self._forbidden_engrave_position
 
@@ -886,12 +902,13 @@ class Agent:
         level = self.current_level()
 
         walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
-                   ~self.monster_tracker.peaceful_monster_mask & \
-                   ~utils.isin(level.objects, G.TRAPS)
+                   ~self.monster_tracker.peaceful_monster_mask
+
+        if self._last_turn - self._allow_walking_through_traps_turn > 50:
+            walkable &= ~utils.isin(level.objects, G.TRAPS)
 
         for my, mx in list(zip(*np.nonzero(utils.isin(self.glyphs, G.MONS)))):
             mon = MON.permonst(self.glyphs[my][mx])
-            import fight_heur
             if mon.mname in fight_heur.ONLY_RANGED_SLOW_MONSTERS:
                 walkable[my, mx] = False
 
@@ -1101,76 +1118,14 @@ class Agent:
 
         return False
 
-    def _init_fight3_model(self):
-        self._fight3_model = rl_utils.RLModel({
-            'walkable': ((7, 7), bool),
-            'monster_mask': ((7, 7), bool),
-        },
-            [(y, x) for y in [-1, 0, 1] for x in [-1, 0, 1]],
-            train=self.rl_model_to_train == 'fight3',
-            training_comm=self.rl_model_training_comm,
-        )
-
-    @utils.debug_log('fight3')
-    @Strategy.wrap
-    def fight3(self):
-        yielded = False
-        while 1:
-            monsters = self.get_visible_monsters()
-
-            # get only monsters with path to them
-            monsters = [m for m in monsters if m[0] != -1]
-
-            if not monsters or all(dis > 7 for dis, *_ in monsters):
-                if not yielded:
-                    yield False
-                return
-
-            if not yielded:
-                yielded = True
-                yield True
-                self.character.parse_enhance_view()
-
-            if self.wield_best_melee_weapon():
-                continue
-
-            dis = self.bfs()
-            level = self.current_level()
-            walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
-                       ~self.monster_tracker.peaceful_monster_mask & \
-                       ~utils.isin(level.objects, G.TRAPS)
-
-            radius_y = self._fight3_model.observation_def['walkable'][0][0] // 2
-            radius_x = self._fight3_model.observation_def['walkable'][0][1] // 2
-            y1, y2, x1, x2 = self.blstats.y - radius_y, self.blstats.y + radius_y + 1, \
-                             self.blstats.x - radius_x, self.blstats.x + radius_x + 1
-
-            observation = {
-                'walkable': utils.slice_with_padding(walkable, y1, y2, x1, x2),
-                'monster_mask': utils.slice_with_padding(self.monster_tracker.monster_mask, y1, y2, x1, x2),
-            }
-            actions = [(y, x) for y, x in self._fight3_model.action_space
-                       if 0 <= self.blstats.y + y < C.SIZE_Y and 0 <= self.blstats.x + x < C.SIZE_X \
-                       and level.walkable[self.blstats.y + y, self.blstats.x + x]]
-
-            off_y, off_x = self._fight3_model.choose_action(observation, actions)
-
-            y, x = self.blstats.y + off_y, self.blstats.x + off_x
-            if self.monster_tracker.monster_mask[y, x]:
-                # TODO: copied from `flight1`
-                mon_glyph = self.glyphs[y, x]
-                self.fight(y, x)
-            else:
-                self.move(y, x)
-
     @utils.debug_log('fight2')
     @Strategy.wrap
     def fight2(self):
-        import fight_heur
         yielded = False
         wait_counter = 0
         while 1:
             monsters = self.get_visible_monsters()
+            allow_attack_all = self._last_turn - self._allow_attack_all_turn < 3
             only_ranged_slow_monsters = all([monster[3].mname in fight_heur.ONLY_RANGED_SLOW_MONSTERS
                                              and not fight_heur.consider_melee_only_ranged_if_hp_full(self, monster)
                                              for monster in monsters])
@@ -1178,8 +1133,8 @@ class Agent:
             dis = self.bfs()
 
             if not monsters or all(dis > 7 for dis, *_ in monsters) or \
-                    (only_ranged_slow_monsters and not self.inventory.get_ranged_combinations() and np.sum(
-                        dis != -1) > 1):
+                    (only_ranged_slow_monsters and not self.inventory.get_ranged_combinations()
+                     and np.sum(dis != -1) > 1 and not allow_attack_all):
                 if wait_counter:
                     self.search()
                     wait_counter -= 1
@@ -1194,114 +1149,234 @@ class Agent:
                 self.character.parse_enhance_view()
 
             move_priority_heatmap, actions = fight_heur.get_priorities(self)
-
-            best_move_score, best_x, best_y, possible_move_to = self._fight2_get_best_move(dis, move_priority_heatmap)
+            actions.extend(fight_heur.get_move_actions(self, dis, move_priority_heatmap))
 
             if self.character.prop.polymorph:
-                actions = list(filter(lambda x: x[1] != 'ranged', actions))
-            best_action = max(actions, key=lambda x: x[0]) if actions else None
+                actions = list(filter(lambda x: x[1][0] != 'ranged', actions))
 
-            if best_y is None and best_action is None:
+            if allow_attack_all:
+                attack_actions = [a for a in actions if a[1][0] in ('melee', 'ranged', 'zap')]
+                if attack_actions:
+                    actions = attack_actions
+
+            if not actions:
                 assert 0, 'No possible action available during fight2'
 
+            # best_action = self.rl_communicate(actions)
+            priority, best_action = max(actions, key=lambda x: x[0]) if actions else None
+
             with self.env.debug_tiles(move_priority_heatmap, color='turbo', is_heatmap=True):
-                def action_str(a):
-                    if a[1] == 'pickup':
-                        return f'{a[0]}{a[1][0]}:{len(a[2])}'
-                    elif a[1] == 'zap':
-                        wand = a[4]
+                def action_str(action):
+                    priority, a = action
+                    if a[0] == 'move':
+                        return f'{priority}m:{a[1]},{a[2]}'
+                    elif a[0] == 'melee':
+                        return f'{priority}me:{a[1]},{a[2]}'
+                    elif a[0] == 'pickup':
+                        return f'{priority}{a[0][0]}:{len(a[1])}'
+                    elif a[0] == 'zap':
+                        wand = a[3]
                         letter = self.inventory.items.get_letter(wand)
-                        return f'{a[0]}z{letter}:{a[2]},{a[3]}'
-                    elif a[1] == 'elbereth':
-                        return f'{a[0]:.1f}e'
-                    elif a[1] == 'wait':
-                        return f'{a[0]:.1f}w'
+                        return f'{priority}z{letter}:{a[1]},{a[2]}'
+                    elif a[0] == 'elbereth':
+                        return f'{priority:.1f}e'
+                    elif a[0] == 'wait':
+                        return f'{priority:.1f}w'
+                    elif a[0] == 'go_to':
+                        return f'{priority}goto:{a[1]},{a[2]}'
                     else:
-                        return f'{a[0]}{a[1][0]}:{a[2]},{a[3]}'
+                        return f'{priority}{a[0][0]}:{a[1]},{a[2]}'
 
                 actions_str = '|'.join([action_str(a) for a in sorted(actions, key=lambda x: x[0])])
-                with self.env.debug_log(actions_str + f'|{best_move_score}|' + '|'.join(map(str, possible_move_to))):
-                    wait_counter = self._fight2_perform_action(best_action, best_move_score, best_x, best_y,
-                                                               wait_counter)
+                with self.env.debug_log(actions_str):
+                    wait_counter = self._fight2_perform_action(best_action, wait_counter)
 
-    def _fight2_get_best_move(self, dis, move_priority_heatmap):
-        mask = ~np.isnan(move_priority_heatmap)
-        if not mask.any():
-            return None, None, None, []
-        move_priority_heatmap[~mask] = np.min(move_priority_heatmap[mask]) - 1
-        adjacent = dis == 1
-        assert np.sum(adjacent) <= 8, np.sum(adjacent)
-        possible_move_to = []
-        if adjacent.any():
-            possible_move_to = list(
-                zip(*np.nonzero((move_priority_heatmap == np.max(move_priority_heatmap[adjacent])) & adjacent)))
-            possible_move_to = [(y, x) for y, x in possible_move_to if mask[y, x]]
-        assert len(possible_move_to) <= 8
-        best_y, best_x = None, None
-        if possible_move_to:
-            best_y, best_x = possible_move_to[self.rng.randint(0, len(possible_move_to))]
-            if move_priority_heatmap[best_y, best_x] < -2 ** 15:
-                best_y, best_x = None, None
-        best_move_score = None
-        if best_y is not None:
-            best_move_score = move_priority_heatmap[best_y, best_x]
-        move_priority_heatmap[~mask] = float('nan')
-        if best_y is not None:
-            assert mask[best_y, best_x]
-        return best_move_score, best_x, best_y, possible_move_to
+    def rl_communicate(self, actions):
+        action_priorities_for_rl = dict()
+        for pr, action in actions:
+            if action[0] == 'go_to':
+                continue
+            if action[0] == 'pickup':
+                action = (action[0],)
+            if action[0] == 'zap':
+                action = action[:3]
+            if action[0] not in ('zap', 'pickup'):
+                assert action in self._fight2_model.action_space, action
+                action_priorities_for_rl[action] = pr
+        observation = self._fight2_get_observation(action_priorities_for_rl)
 
-    def _fight2_perform_action(self, best_action, best_move_score, best_x, best_y, wait_counter):
-        if best_action is None or (best_y is not None and best_move_score > best_action[0]):
-            with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
-                                       [best_y, best_x]], color=(0, 255, 0), is_path=True):
-                self.move(best_y, best_x)
-                wait_counter = 5
-                return wait_counter
-        else:
-            if best_action[1] == 'melee':
-                _, _, target_y, target_x, monster = best_action
-                if self.wield_best_melee_weapon():
-                    return wait_counter
-                with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
-                                           [target_y, target_x]], color=(255, 0, 255), is_path=True):
-                    self.fight(target_y, target_x)
-                    wait_counter = 0
-                    return wait_counter
-            elif best_action[1] == 'ranged':
-                _, _, target_y, target_x, monster = best_action
-                launcher, ammo = self.inventory.get_best_ranged_set()
-                assert ammo is not None
-                if launcher is not None and not launcher.equipped:
-                    if self.inventory.wield(launcher):
-                        return wait_counter
-                with self.env.debug_tiles([[target_y, target_x]], (0, 0, 255, 255), mode='frame'):
-                    dir = self.calc_direction(self.blstats.y, self.blstats.x, target_y, target_x,
-                                              allow_nonunit_distance=True)
-                    assert self.fire(ammo, dir)
-                    return wait_counter
-            elif best_action[1] == 'elbereth':
-                assert self.inventory.engraving_below_me.lower() != 'elbereth'
-                self.engrave("Elbereth")
-                return wait_counter
-            elif best_action[1] == 'wait':
-                assert self.inventory.engraving_below_me.lower() == 'elbereth'
-                self.search()
-                return wait_counter
-            elif best_action[1] == 'zap':
-                _, _, dy, dx, wand, targeted_monsters = best_action
-                dir = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx,
-                                          allow_nonunit_distance=True)
+        # uncomment to gather features for get_observations_stats.py
+        # import pickle
+        # import base64
+        # encoded = base64.b64encode(pickle.dumps(observation)).decode()
+        # with open('/tmp/vis/observations.txt', 'a', buffering=1) as f:
+        #     f.writelines([encoded + '\n'])
 
-                with self.env.debug_tiles([[my, mx] for my, mx, _ in targeted_monsters],
-                                          (255, 0, 255, 255), mode='frame'):
-                    self.zap(wand, dir)
+        priority, best_action = max(actions, key=lambda x: x[0]) if actions else None
+        rl_action = self._fight2_model.choose_action(self, observation, list(action_priorities_for_rl.keys()))
+        # TODO: use RL
+        best_action = rl_action
+        return best_action
 
-            elif best_action[1] == 'pickup':
-                _, _, items_to_pickup = best_action
-                self.inventory.pickup(items_to_pickup)
+    def _fight2_action_space(self):
+        directions = [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)]
+        return [
+            *[('move', dy, dx) for dy, dx in directions],
+            *[('melee', dy, dx) for dy, dx in directions],
+            *[('ranged', dy, dx) for dy, dx in directions],
+            # *[('zap', dy, dx) for dy, dx in directions],
+            # ('pickup',),
+        ]
+
+    def _init_fight2_model(self):
+        import rl_utils
+        self._fight2_model = rl_utils.RLModel((
+                ('player_scalar_stats', ((5,), np.float32)),
+                ('semantic_maps', ((3, RL_CONTEXT_SIZE, RL_CONTEXT_SIZE), np.float32)),
+                ('heur_action_priorities', ((8 * 3,), np.float32)),
+            ),
+            action_space=self._fight2_action_space(),
+            train=self.rl_model_to_train == 'fight2',
+            training_comm=self.rl_model_training_comm,
+        )
+        with open('/workspace/rl_features_stats.json', 'r') as f:
+            self._fight2_features_stats = json.load(f)
+
+    def _fight2_player_scalar_stats(self):
+        ret = [self.blstats.hitpoints,
+               self.blstats.max_hitpoints,
+               self.blstats.hitpoints / self.blstats.max_hitpoints,
+               fight_heur.wielding_ranged_weapon(self),
+               fight_heur.wielding_melee_weapon(self)]
+        ret = np.array(ret, dtype=np.float32)
+        assert not np.isnan(ret).any()
+        return ret
+
+    def _fight2_semantic_maps(self):
+        radius_y = radius_x = RL_CONTEXT_SIZE // 2
+        y1, y2, x1, x2 = self.blstats.y - radius_y, self.blstats.y + radius_y + 1, \
+                         self.blstats.x - radius_x, self.blstats.x + radius_x + 1
+        level = self.current_level()
+        walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
+                   ~self.monster_tracker.peaceful_monster_mask & \
+                   ~utils.isin(level.objects, G.TRAPS)
+
+        mspeed = np.ones((C.SIZE_Y, C.SIZE_X), dtype=int) * np.nan
+        for _, y, x, mon, _ in self.get_visible_monsters():
+            mspeed[y][x] = mon.mmove
+
+        ret = list(map(lambda q: utils.slice_with_padding(q, y1, y2, x1, x2), (
+            walkable, self.monster_tracker.monster_mask, mspeed,
+        )))
+        return np.stack(ret, axis=0).astype(np.float32)
+
+    def _fight2_encoded_heur_action_priorities(self, heur_priorities):
+        ret = []
+        for action in self._fight2_model.action_space:
+            if action in heur_priorities:
+                ret.append(heur_priorities[action])
             else:
-                raise NotImplementedError()
-        return wait_counter
+                ret.append(np.nan)
+        return np.array(ret).astype(np.float32)
+
+    def _fight2_get_observation(self, heur_priorities):
+        def normalize(name, features):
+            mean, std, minv = [self._fight2_features_stats[name][k] for k in ['mean', 'std', 'min']]
+            v_normalized = features.copy()
+            assert len(mean) == features.shape[0], (len(mean), features.shape[0])
+            for i in range(features.shape[0]):
+                v_normalized[i, ...] = (features[i, ...] - mean[i]) / std[i]
+            if name == 'heur_action_priorities':
+                for i in range(v_normalized.shape[0]):
+                    if np.isnan(v_normalized[i]):
+                        v_normalized[i] = minv[i]
+            else:
+                v_normalized[np.isnan(v_normalized)] = 0
+            return v_normalized
+        return {k: normalize(k, v) for k, v in
+                [('player_scalar_stats', self._fight2_player_scalar_stats()),
+                 ('semantic_maps', self._fight2_semantic_maps()),
+                 ('heur_action_priorities', self._fight2_encoded_heur_action_priorities(heur_priorities))]}
+
+    def _fight2_perform_action(self, best_action, wait_counter):
+        if best_action[0] == 'move':
+            _, dy, dx = best_action
+            target_y, target_x = self.blstats.y + dy, self.blstats.x + dx
+            with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
+                                       [target_y, target_x]], color=(0, 255, 0), is_path=True):
+                wait_counter = 5
+                self.move(target_y, target_x)
+                return wait_counter
+        elif best_action[0] == 'melee':
+            _, dy, dx = best_action
+            target_y = self.blstats.y + dy
+            target_x = self.blstats.x + dx
+            if self.wield_best_melee_weapon():
+                return wait_counter
+            with self.env.debug_tiles([[self.blstats.y, self.blstats.x],
+                                       [target_y, target_x]], color=(255, 0, 255), is_path=True):
+                self.fight(target_y, target_x)
+                wait_counter = 0
+                return wait_counter
+
+        elif best_action[0] == 'ranged':
+            _, dy, dx = best_action
+            target_y = self.blstats.y + dy
+            target_x = self.blstats.x + dx
+            launcher, ammo = self.inventory.get_best_ranged_set()
+            assert ammo is not None
+            if launcher is not None and not launcher.equipped:
+                if self.inventory.wield(launcher):
+                    return wait_counter
+            with self.env.debug_tiles([[target_y, target_x]], (0, 0, 255, 255), mode='frame'):
+                dir = self.calc_direction(self.blstats.y, self.blstats.x, target_y, target_x,
+                                          allow_nonunit_distance=True)
+                fired = self.fire(ammo, dir)
+                assert fired, (ammo, dir)
+                return wait_counter
+
+        elif best_action[0] == 'elbereth':
+            assert self.inventory.engraving_below_me.lower() != 'elbereth'
+            self.engrave("Elbereth")
+            return wait_counter
+        elif best_action[0] == 'wait':
+            assert self.inventory.engraving_below_me.lower() == 'elbereth'
+            self.stats_logger.log_event('wait_in_fight')
+            self.search()
+            return wait_counter
+        elif best_action[0] == 'zap':
+            if len(best_action) == 5:
+                _, dy, dx, wand, targeted_monsters = best_action
+            else:
+                _, dy, dx, = best_action
+                for item in self.inventory.items:
+                    if item.is_offensive_usable_wand():
+                        wand = item
+                        break
+                else:
+                    assert 0
+                targeted_monsters = []
+            dir = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx,
+                                      allow_nonunit_distance=True)
+
+            with self.env.debug_tiles([[my, mx] for my, mx, _ in targeted_monsters],
+                                      (255, 0, 255, 255), mode='frame'):
+                self.zap(wand, dir)
+            return wait_counter
+
+        elif best_action[0] == 'pickup':
+            if len(best_action) == 2:
+                _, items_to_pickup = best_action
+            else:
+                items_to_pickup = fight_heur.decide_what_to_pickup(self)
+            self.inventory.pickup(items_to_pickup)
+            return wait_counter
+        elif best_action[0] == 'go_to':
+            _, target_y, target_x = best_action
+            self.go_to(target_y, target_x, stop_one_before=True, max_steps=1,
+                       debug_tiles_args=dict(color=(255, 0, 0), is_path=True))
+            return wait_counter
+        raise NotImplementedError(best_action)
 
     @utils.debug_log('engulfed_fight')
     @Strategy.wrap
@@ -1314,74 +1389,6 @@ class Agent:
             if not mask.any():
                 break
             assert self.fight(*list(zip(*mask.nonzero()))[0])
-
-    @utils.debug_log('fight1')
-    @Strategy.wrap
-    def fight1(self):
-        yielded = False
-        while 1:
-            monsters = self.get_visible_monsters()
-
-            # get only monsters with path to them
-            monsters = [m for m in monsters if m[0] != -1]
-
-            if not monsters or all(dis > 7 for dis, *_ in monsters):
-                if not yielded:
-                    yield False
-                return
-
-            if not yielded:
-                yielded = True
-                yield True
-                self.character.parse_enhance_view()
-
-            assert len(monsters) > 0
-            dis, y, x, _, mon_glyph = monsters[0]
-
-            def is_monster_next_to_me():
-                monsters = self.get_visible_monsters()
-                if not monsters:
-                    return False
-                for _, y, x, _, _ in monsters:
-                    if utils.adjacent((y, x), (self.blstats.y, self.blstats.x)):
-                        return True
-                return False
-
-            with self.context_preempt([
-                is_monster_next_to_me,
-            ]) as outcome:
-                if outcome() is None:
-                    if self.ranged_stance1():
-                        continue
-
-            keep_distance = self.should_keep_distance(monsters)
-            if self.keep_distance(monsters, keep_distance):
-                continue
-            # else:
-            #     if self.emergency_strategy().run(return_condition=True):
-            #         continue
-
-            # TODO: why is this possible
-            if self.bfs()[y, x] == -1:
-                continue
-
-            if abs(self.blstats.y - y) > 1 or abs(self.blstats.x - x) > 1:
-                throwable = [i for i in self.inventory.items if i.is_thrown_projectile() and not i.equipped]
-                # TODO: don't shoot pet !
-                # TODO: limited range
-                if throwable and (self.blstats.y == y or self.blstats.x == x or abs(self.blstats.y - y) == abs(
-                        self.blstats.x - x)):
-                    dir = self.calc_direction(self.blstats.y, self.blstats.x, y, x, allow_nonunit_distance=True)
-                    self.fire(throwable[0], dir)
-                    continue
-
-                self.go_to(y, x, stop_one_before=True, max_steps=1,
-                           debug_tiles_args=dict(color=(255, 0, 0), is_path=True))
-                continue
-
-            if self.wield_best_melee_weapon():
-                continue
-            self.fight(y, x)
 
     def _is_corpse_editable(self, monster_id, age_turn):
         permonst = MON.permonst(monster_id)

@@ -10,7 +10,7 @@ import utils
 from glyph import G
 from item import flatten_items
 
-ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore']
+ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
 # COLD_MONSTERS = ['brown mold']
 # COLD_MONSTERS = []
 
@@ -86,6 +86,11 @@ def draw_monster_priority_positive(agent, monster, priority, walkable):
             _draw_around(priority, y, x, 1, radius=2, operation='max')
         if len(agent.inventory.get_ranged_combinations()):
             _draw_ranged(priority, y, x, 1, walkable, radius=7, operation='max')
+    elif 'unicorn' in mon.mname:
+        if agent.blstats.hitpoints >= 15 or agent.blstats.hitpoints == agent.blstats.max_hitpoints:
+            # freely engage in melee
+            _draw_around(priority, y, x, 2, radius=1, operation='max')
+            _draw_around(priority, y, x, 1, radius=2, operation='max')
     else:
         if not imminent_death_on_melee(agent, monster) and not wielding_ranged_weapon(agent):
             # engage, but ensure striking first if possible
@@ -109,7 +114,7 @@ def is_monster_faster(agent, monster):
 
 def imminent_death_on_melee(agent, monster):
     if is_dangerous_monster(monster):
-        return agent.blstats.hitpoints <= 15
+        return agent.blstats.hitpoints <= 16
     return agent.blstats.hitpoints <= 8
 
 
@@ -158,6 +163,8 @@ def draw_monster_priority_negative(agent, monster, priority, walkable):
     elif mon.mname in ONLY_RANGED_SLOW_MONSTERS:  # and agent.inventory.get_ranged_combinations():
         # ignore
         pass
+    elif 'unicorn' in mon.mname:
+        pass
     else:
         if mon.mname not in WEAK_MONSTERS:
             # engage, but ensure striking first if possible
@@ -192,6 +199,8 @@ def melee_monster_priority(agent, monsters, monster):
         ret -= 6
     if mon.mname in EXPLODING_MONSTERS:
         ret -= 17
+    if 'were' in mon.mname:
+        ret += 1
     # if not wielding_melee_weapon(agent):
     #     ret -= 5
     if mon.mname in ONLY_RANGED_SLOW_MONSTERS:
@@ -199,6 +208,20 @@ def melee_monster_priority(agent, monsters, monster):
             ret -= 100
             if mon.mname == 'floating eye':
                 ret -= 10
+            if mon.mname == 'gas spore':
+                ret -= 5
+
+    if mon.mname == 'gas spore':
+        # handle a specific case when you are trapped by a gas spore
+        if len(agent.get_visible_monsters()) == 1 \
+                and agent.blstats.hitpoints / agent.blstats.max_hitpoints:
+            dis = agent.bfs()
+            for y2, x2 in zip(*np.nonzero(dis != -1)):
+                if not utils.adjacent((y, x), (y2, x2)):
+                    return ret
+            agent.stats_logger.log_event('melee_gas_spore')
+            return 1 # a priority higher than random moving around
+
     return ret
 
 
@@ -331,6 +354,9 @@ def is_dangerous_monster(monster):
     _, y, x, mon, _ = monster
     is_pet = 'dog' in mon.mname or 'cat' in mon.mname or 'kitten' in mon.mname or 'pony' in mon.mname \
              or 'horse' in mon.mname
+    # 'mumak' in mon.mname or 'orc' in mon.mname or 'rothe' in mon.mname \
+    # or 'were' in mon.mname or 'unicorn' in mon.mname or 'elf' in mon.mname or 'leocrotta' in mon.mname \
+    # or 'mimic' in mon.mname
     return is_pet or mon.mname in INSECTS
 
 
@@ -365,7 +391,7 @@ def get_potential_wand_usages(agent, monsters, dy, dx):
             priority = priority - 15
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
                 priority -= 100
-            ret.append((priority, 'zap', dy, dx, item, targeted_monsters))
+            ret.append((priority, ('zap', dy, dx, item, targeted_monsters)))
     return ret
 
 
@@ -393,15 +419,15 @@ def elbereth_action(agent, monsters):
 
     player_hp_ratio = (agent.blstats.hitpoints / agent.blstats.max_hitpoints) ** 0.5
     if agent.blstats.hitpoints < 30 and adj_monsters_count > 0:
-        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), 'elbereth')]
+        return [(-15 + 20 * adj_monsters_count * (1 - player_hp_ratio), ('elbereth', ))]
     return []
 
 
 def wait_action(agent, monsters):
     if agent.inventory.engraving_below_me.lower() == 'elbereth':
         player_hp_ratio = agent.blstats.hitpoints / agent.blstats.max_hitpoints
-        priority = 25 - player_hp_ratio * 40
-        return [(priority, 'wait')]
+        priority = 30 - player_hp_ratio * 40
+        return [(priority, ('wait',))]
     return []
 
 
@@ -415,7 +441,9 @@ def get_available_actions(agent, monsters):
             priority = melee_monster_priority(agent, monsters, monster)
             if agent.inventory.engraving_below_me.lower() == 'elbereth':
                 priority -= 100
-            actions.append((priority, 'melee', y, x, monster))
+            dy = y - agent.blstats.y
+            dx = x - agent.blstats.x
+            actions.append((priority, ('melee', dy, dx)))
 
     # ranged attack actions
     for dy, dx in product([-1, 0, 1], [-1, 0, 1]):
@@ -427,11 +455,21 @@ def get_available_actions(agent, monsters):
                     pri -= 100
                 if all(monster[3].mname in ONLY_RANGED_SLOW_MONSTERS for monster in monsters):
                     pri += 10
-                actions.append((pri, 'ranged', y, x, monster))
+                actions.append((pri, ('ranged', dy, dx)))
 
             actions.extend(get_potential_wand_usages(agent, monsters, dy, dx))
 
-    # pickup items actions
+    to_pickup = decide_what_to_pickup(agent)
+    if to_pickup:
+        actions.append((15, ('pickup', to_pickup)))
+
+    actions.extend(elbereth_action(agent, monsters))
+    actions.extend(wait_action(agent, monsters))
+
+    return actions
+
+
+def decide_what_to_pickup(agent):
     projectiles_below_me = [i for i in agent.inventory.items_below_me
                             if i.is_thrown_projectile() or i.is_fired_projectile()]
     my_launcher, ammo = agent.inventory.get_best_ranged_set(additional_ammo=[i for i in projectiles_below_me])
@@ -439,13 +477,28 @@ def get_available_actions(agent, monsters):
     for item in agent.inventory.items_below_me:
         if item.is_thrown_projectile() or (my_launcher is not None and item.is_fired_projectile(launcher=my_launcher)):
             to_pickup.append(item)
-    if to_pickup:
-        actions.append((15, 'pickup', to_pickup))
+    return to_pickup
 
-    # actions.extend(elbereth_action(agent, monsters))
-    # actions.extend(wait_action(agent, monsters))
 
-    return actions
+def goto_action(agent, priority, monsters):
+    values = []
+    walkable = agent.current_level().walkable
+    for dy, dx in [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1)]:
+        y, x = agent.blstats.y - dy, agent.blstats.x - dx
+        if not 0 <= y < walkable.shape[0] or not 0 <= x < walkable.shape[1]:
+            continue
+        if not np.isnan(priority[y, x]):
+            values.append(priority[y, x])
+    if len(set(values)) > 1:
+        return []
+
+    assert monsters
+    for monster in monsters:
+        _, my, mx, mon, _ = monster
+        if not utils.adjacent((agent.blstats.y, agent.blstats.x), (my, mx)):
+            # and not mon.mname in ONLY_RANGED_SLOW_MONSTERS:
+            return [(1, ('go_to', my, mx))]
+    assert 0, monsters
 
 
 def get_corridors_priority_map(walkable):
@@ -479,4 +532,22 @@ def get_priorities(agent):
     # use relative priority to te current position
     priority -= priority[agent.blstats.y, agent.blstats.x]
 
-    return priority, get_available_actions(agent, monsters)
+    actions = get_available_actions(agent, monsters)
+    if not any(a[1][0] in ('melee', 'ranged') for a in actions):
+        actions.extend(goto_action(agent, priority, monsters))
+    return priority, actions
+
+
+def get_move_actions(agent, dis, move_priority_heatmap):
+    """ Returns list of tuples (priority, ('move', dy, dx)) """
+    ret = []
+    for dy, dx in [(-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]:
+        y, x = agent.blstats.y + dy, agent.blstats.x + dx
+        if not 0 <= y < dis.shape[0] or not 0 <= x < dis.shape[1]:
+            continue
+        if not dis[y, x] == 1:
+            continue
+
+        if not np.isnan(move_priority_heatmap[y, x]):
+            ret.append((move_priority_heatmap[y, x], ('move', dy, dx)))
+    return ret

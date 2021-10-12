@@ -14,6 +14,10 @@ def extract_last_part_from_exception(text):
     return text[text.rfind('  File "'):]
 
 
+def extract_last_place_from_exception(text):
+    return text[text.rfind('  File "'):].splitlines()[0]
+
+
 def load_df(filepath):
     with Path(filepath).open() as f:
         df = json.load(f)
@@ -29,10 +33,10 @@ def give_examples(df, ref_df):
 
 def print_exceptions(df, ref_df):
     print(HEADER, 'EXCEPTIONS:')
-    counter = Counter([extract_last_part_from_exception(r) for r in df.end_reason if r.startswith('exception:')])
+    counter = Counter([extract_last_place_from_exception(r) for r in df.end_reason if r.startswith('exception:')])
     for k, v in counter.most_common():
-        d = df[[r.startswith('exception:') and k == extract_last_part_from_exception(r) for r in df.end_reason]]
-        print(k, ':', give_examples(d, df))
+        d = df[[r.startswith('exception:') and k == extract_last_place_from_exception(r) for r in df.end_reason]]
+        print(k, '\n', extract_last_part_from_exception(d.end_reason.iloc[0]) ,':', give_examples(d, df))
         print()
     print()
     print()
@@ -152,5 +156,5 @@ if __name__ == '__main__':
     pd.set_option('display.width', None)
     pd.set_option('display.max_colwidth', 30)
 
-    filepath = '/tmp/nh_sim.json' if len(sys.argv) <= 1 else sys.argv[1]
+    filepath = '/workspace/nh_sim.json' if len(sys.argv) <= 1 else sys.argv[1]
     main(filepath)

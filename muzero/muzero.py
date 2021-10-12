@@ -84,11 +84,13 @@ class MuZero:
             )
         else:
             total_gpus = 0
-        self.num_gpus = total_gpus / split_resources_in
+        #self.num_gpus = total_gpus / split_resources_in
+        self.num_gpus = 1
         if 1 < self.num_gpus:
             self.num_gpus = math.floor(self.num_gpus)
 
-        ray.init(num_gpus=total_gpus, ignore_reinit_error=True)
+        # ray.init(num_gpus=total_gpus, ignore_reinit_error=True)
+        ray.init(address='auto')
 
         # Checkpoint and replay buffer used to initialize workers
         self.checkpoint = {
@@ -169,7 +171,7 @@ class MuZero:
 
         self.self_play_workers = [
             self_play.SelfPlay.options(
-                num_cpus=0,
+                num_cpus=1,
                 num_gpus=num_gpus_per_worker if self.config.selfplay_on_gpu else 0,
             ).remote(
                 self.checkpoint, self.Game, self.config, self.config.seed + seed,
