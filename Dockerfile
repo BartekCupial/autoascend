@@ -19,6 +19,6 @@ RUN adduser --disabled-password \
 USER ${USER_NAME}
 WORKDIR ${HOME_DIR}
 
-RUN pip install opencv-python toolz pyinstrument
+RUN pip install opencv-python toolz pyinstrument seaborn
 RUN pip install nle aicrowd-gym
 COPY --chown=1001:1001 . ${HOME_DIR}
