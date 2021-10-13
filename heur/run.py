@@ -84,24 +84,23 @@ class EnvWrapper:
             timer_thread.join()
 
 
-def single_game(i):
+def worker(args):
+    from_, to_ = args
     orig_env = aicrowd_gym.make('NetHackChallenge-v0')
-    if orig_env is None:
-        print(f'Run {i} not available', file=sys.stderr)
-        return
 
-    try:
+    scores = []
+    for i in range(from_, to_):
         env = EnvWrapper(orig_env)
         try:
             env.main()
         except BaseException as e:
             print(''.join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
-    finally:
-        orig_env.close()
 
-    print(f'Run {i} finished with score {env.score}', file=sys.stderr)
+        print(f'Run {i} finished with score {env.score}', file=sys.stderr)
 
-    return env.score
+        scores.append(env.score)
+    orig_env.close()
+    return scores
 
 if __name__ == "__main__":
     NUM_ASSESSMENTS = int(sys.argv[1])
@@ -110,7 +109,11 @@ if __name__ == "__main__":
     start_time = time.time()
 
     with Pool(NUM_THREADS) as pool:
-        scores = list(pool.map(single_game, range(NUM_ASSESSMENTS)))
+        scores = list(pool.map(worker,
+                              [(i * NUM_ASSESSMENTS // NUM_THREADS,
+                                (i + 1) * NUM_ASSESSMENTS // NUM_THREADS)
+                               for i in range(NUM_THREADS)]))
+    scores = [s for ss in scores for s in ss]
 
     print('scores  :', scores, file=sys.stderr)
     print('duration:', time.time() - start_time, file=sys.stderr)
