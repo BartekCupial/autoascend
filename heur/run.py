@@ -77,7 +77,7 @@ class EnvWrapper:
         timer_thread.start()
         try:
             self.reset()
-            self.agent = Agent(self)
+            self.agent = Agent(self, panic_on_errors=True)
             self.agent.main()
         finally:
             self._finished = True
