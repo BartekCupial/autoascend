@@ -59,7 +59,7 @@ class EnvWrapper:
             step_count = self.step_count
             for _ in range(20):
                 time.sleep(0.25)
-                if step_count != self.step_count:
+                if step_count != self.step_count or self._finished:
                     break
             else:
                 for thread_id, thread in threading._active.items():
