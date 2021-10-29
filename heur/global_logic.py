@@ -20,6 +20,7 @@ class ItemPriority(ItemPriorityBase):
     def __init__(self, agent):
         self.agent = agent
         self._take_sacrificial_corpses = False
+        self._drop_gold_till_turn = -float('inf')
 
     def _split(self, items, forced_items, weight_capacity):
         remaining_weight = weight_capacity
@@ -55,6 +56,11 @@ class ItemPriority(ItemPriorityBase):
             if item.is_container() and item.status in [Item.UNCURSED, Item.BLESSED] and item.objs[0].desc == 'bag':
                 bag = item  # TODO: select the best
                 add_item(bag)
+
+        if self._drop_gold_till_turn < self.agent.blstats.time:
+            for item in items:
+                if item.category == nh.COIN_CLASS:
+                    add_item(item)
 
         for allow_unknown_status in [False, True]:
             item = self.agent.inventory.get_best_melee_weapon(items=forced_items + items,
@@ -134,8 +140,8 @@ class ItemPriority(ItemPriorityBase):
 class Milestone(IntEnum):
     BE_ON_FIRST_LEVEL = auto()
     FIND_GNOMISH_MINES = auto()
-    FIND_LIGHT_GNOMISH_MINES = auto()
-    FARM_LIGHT_GNOMISH_MINES = auto()
+    # FIND_LIGHT_GNOMISH_MINES = auto()
+    # FARM_LIGHT_GNOMISH_MINES = auto()
     FIND_MINETOWN = auto()
     FIND_SOKOBAN = auto()
     SOLVE_SOKOBAN = auto()
@@ -484,6 +490,14 @@ class GlobalLogic:
         if not utils.isin(self.agent.glyphs, G.GUARD).any():
             yield False
 
+        if any(item.category == nh.COIN_CLASS for item in flatten_items(self.agent.inventory.items)):
+            yield True
+            # if 'Please drop that gold and follow me.' in self.message:
+            self.agent.stats_logger.log_event('drop_gold')
+            self.item_priority._drop_gold_till_turn = self.agent.blstats.time + 100
+            self.agent.inventory.arrange_items().run()
+            return
+
         ys, xs = utils.isin(self.agent.glyphs, G.GUARD).nonzero()
         y, x = ys[0], xs[0]
 
@@ -491,6 +505,7 @@ class GlobalLogic:
             yield False
 
         yield True
+
         self.agent.go_to(y, x, stop_one_before=True)
 
     @Strategy.wrap
@@ -499,7 +514,7 @@ class GlobalLogic:
         while 1:
             explore_stairs_condition = lambda: False
             if self.milestone == Milestone.BE_ON_FIRST_LEVEL:
-                condition = lambda: self.agent.blstats.experience_level >= 7
+                condition = lambda: self.agent.blstats.experience_level >= 8
                 # explore_stairs_condition = lambda: self.agent.inventory.items.total_nutrition() == 0 and \
                 #                                    self.agent.blstats.hunger_state >= Hunger.NOT_HUNGRY
                 level = (Level.DUNGEONS_OF_DOOM, 1)
@@ -512,14 +527,14 @@ class GlobalLogic:
                 condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES
                 level = (Level.GNOMISH_MINES, 1)
 
-            elif self.milestone == Milestone.FIND_LIGHT_GNOMISH_MINES:
-                condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES \
-                        and self.agent.current_level().is_light_level()
-                level = (Level.GNOMISH_MINES, 9)
+            # elif self.milestone == Milestone.FIND_LIGHT_GNOMISH_MINES:
+            #     condition = lambda: self.agent.current_level().dungeon_number == Level.GNOMISH_MINES \
+            #             and self.agent.current_level().is_light_level()
+            #     level = (Level.GNOMISH_MINES, 9)
 
-            elif self.milestone == Milestone.FARM_LIGHT_GNOMISH_MINES:
-                condition = lambda: self.agent.blstats.experience_level >= 11
-                level = (Level.GNOMISH_MINES, self.agent.current_level().level_number)
+            # elif self.milestone == Milestone.FARM_LIGHT_GNOMISH_MINES:
+            #     condition = lambda: self.agent.blstats.experience_level >= 11
+            #     level = (Level.GNOMISH_MINES, self.agent.current_level().level_number)
 
             elif self.milestone == Milestone.FIND_MINETOWN:
                 condition = lambda: self.minetown_level is not None

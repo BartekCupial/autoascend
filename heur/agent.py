@@ -1,10 +1,11 @@
 import json
 import contextlib
 import re
-from collections import namedtuple, Counter
+from collections import namedtuple, Counter, defaultdict
 from functools import partial
 from stats_logger import StatsLogger
 
+import nltk
 import nle.nethack as nh
 import numpy as np
 from nle.nethack import actions as A
@@ -79,6 +80,8 @@ class Agent:
         # when (number of turn) there was last decision about allowing these actions (e.g. agent is somewhat stuck)
         self._allow_walking_through_traps_turn = -float('inf')
         self._allow_attack_all_turn = -float('inf')
+
+        self.last_cast_fail_turn = defaultdict(lambda: -float('inf'))
 
         # uncomment to use RL-based fight decisions
         # self._init_fight2_model()
@@ -375,6 +378,13 @@ class Agent:
 
         self.cursor_pos = (observation['tty_cursor'][0] - 1, observation['tty_cursor'][1])
 
+        if hasattr(self, 'blstats'):
+            for item in flatten_items(self.inventory.items):
+                if item.category == nh.COIN_CLASS:
+                    self.stats_logger.log_gold(item.count)
+            else:
+                self.stats_logger.log_gold(0)
+
         if done:
             raise AgentFinished()
 
@@ -625,6 +635,16 @@ class Agent:
                 level.objects[y, x] = self.glyphs[y, x]
                 level.walkable[y, x] = False  # necessary for the exit route from vaults
 
+        # ad aerarium -- avoid valut entrance
+        if self.inventory.engraving_below_me and nltk.edit_distance(self.inventory.engraving_below_me, "ad aerarium") <= 6:
+            self.stats_logger.log_event('ad_aerarium_below_me')
+            for dy, dx in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                y, x = self.blstats.y + dy, self.blstats.x + dx
+                if (0 <= y < level.forbidden.shape[0] and 0 <= x < level.forbidden.shape[1]) \
+                        and not level.walkable[y, x]:
+                    level.forbidden[y, x] = True
+
+
     ######## TRIVIAL HELPERS
 
     def current_level(self):
@@ -718,10 +738,10 @@ class Agent:
             self.stats_logger.log_event('container_untrap_fail')
             return self.message
 
-    def is_safe_to_pray(self):
+    def is_safe_to_pray(self, limit=500):
         return (
                 (self.last_prayer_turn is None and self.blstats.time > 300) or
-                (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > 900)
+                (self.last_prayer_turn is not None and self.blstats.time - self.last_prayer_turn > limit)
         )
 
     def pray(self):
@@ -762,6 +782,34 @@ class Agent:
             self.type_text(self.inventory.items.get_letter(item))
             self.direction(direction)
         return True
+
+    def cast(self, spell_name, direction):
+        with self.atom_operation():
+            dy, dx = direction
+            direction = self.calc_direction(self.blstats.y, self.blstats.x, self.blstats.y + dy, self.blstats.x + dx)
+            success = [False]
+            def type_letters():
+                # while f'{letter} - ' not in '\n'.join(self.single_popup):
+                #     yield A.TextCharacters.SPACE
+                # if self.single_message.startswith("You fail to cast the spell correctly."):
+                #     return
+                if 'You are too impaired' in self.message:
+                    return
+                yield self.character.known_spells[spell_name]
+                for _ in range(3):
+                    if 'In what direction?' in self.message:
+                        break
+                    yield ' '
+                if 'In what direction?' in self.message:
+                    success[0] = True
+                    yield direction
+
+            self.step(A.Command.CAST, type_letters())
+            if success[0]:
+                self.stats_logger.log_event(f'cast_{spell_name}')
+            else:
+                self.last_cast_fail_turn[spell_name] = self._last_turn
+                self.stats_logger.log_event(f'cast_fail_{spell_name}')
 
     def kick(self, y, x=None):
         with self.panic_if_position_changes():
@@ -902,7 +950,8 @@ class Agent:
         level = self.current_level()
 
         walkable = level.walkable & ~utils.isin(self.glyphs, G.BOULDER) & \
-                   ~self.monster_tracker.peaceful_monster_mask
+                   ~self.monster_tracker.peaceful_monster_mask & \
+                   ~level.forbidden
 
         if self._last_turn - self._allow_walking_through_traps_turn > 50:
             walkable &= ~utils.isin(level.objects, G.TRAPS)
@@ -1030,35 +1079,6 @@ class Agent:
 
     ######## LOW-LEVEL STRATEGIES
 
-    @utils.debug_log('ranged_stance1')
-    def ranged_stance1(self):
-        while True:
-            valid_combinations = self.inventory.get_ranged_combinations(throwing=False)
-
-            # TODO: select best combination
-            if not valid_combinations:
-                self.wield_best_melee_weapon()
-                return False
-
-            # TODO: consider using monster information to select the best combination
-            launcher, ammo = valid_combinations[0]
-            if not launcher.equipped:
-                if not self.inventory.wield(launcher):
-                    return False
-                continue
-
-            for _, y, x, _, _ in self.get_visible_monsters():
-                if (self.blstats.y == y or self.blstats.x == x or abs(self.blstats.y - y) == abs(self.blstats.x - x)):
-                    # TODO: don't shoot pet !
-                    # TODO: limited range
-                    with self.env.debug_tiles([[y, x]], (0, 0, 255, 100)):
-                        dir = self.calc_direction(self.blstats.y, self.blstats.x, y, x, allow_nonunit_distance=True)
-                        if not self.fire(ammo, dir):
-                            return False
-                        break
-            else:
-                return False
-
     def get_visible_monsters(self):
         """ Returns list of tuples (distance, y, x, permonst, monster_glyph)
         """
@@ -1083,40 +1103,6 @@ class Agent:
                     ret.append((dis[y][x], y, x, MON.permonst(self.glyphs[y][x]), self.glyphs[y][x]))
         ret.sort()
         return ret
-
-    def should_keep_distance(self, monsters):
-        ret = np.zeros(len(monsters), dtype=bool)
-        for i, (dis, y, x, mon, _) in enumerate(monsters):
-            if max(abs(x - self.blstats.x), abs(y - self.blstats.y)) not in (1, 2):
-                continue
-            # if mon.mname == 'goblin':
-            #     ret[i] = True
-            if self.blstats.hitpoints <= 8:
-                ret[i] = True
-        return ret
-
-    @utils.debug_log('keep_distance')
-    def keep_distance(self, monsters, keep_distance):
-        if not keep_distance.any():
-            return False
-        monsters = [m for m, k in zip(monsters, keep_distance) if k]
-        bad_tiles = ~self.current_level().walkable
-        for _, y, x, _, _ in monsters:
-            for y1 in (y - 1, y, y + 1):
-                for x1 in (x - 1, x, x + 1):
-                    if 0 <= y1 <= bad_tiles.shape[0] and 0 <= x1 <= bad_tiles.shape[1]:
-                        bad_tiles[y1, x1] = True
-
-        with self.env.debug_tiles(bad_tiles, color=(255, 0, 0, 64)):
-            for y1 in (y - 1, y, y + 1):
-                for x1 in (x - 1, x, x + 1):
-                    if 0 <= y1 <= bad_tiles.shape[0] and 0 <= x1 <= bad_tiles.shape[1]:
-                        if not bad_tiles[y1][x1]:
-                            with self.env.debug_tiles([[y1, x1]], color=(0, 255, 0, 64)):
-                                self.move(y1, x1)
-                            return True
-
-        return False
 
     @utils.debug_log('fight2')
     @Strategy.wrap
@@ -1147,6 +1133,7 @@ class Agent:
                 yielded = True
                 yield True
                 self.character.parse_enhance_view()
+                # self.character.parse_spellcast_view()
 
             move_priority_heatmap, actions = fight_heur.get_priorities(self)
             actions.extend(fight_heur.get_move_actions(self, dis, move_priority_heatmap))
@@ -1519,29 +1506,76 @@ class Agent:
         if not yielded:
             yield False
 
+    def should_cast_heal(self):
+        # TODO: consider casting for other classes
+        if self.character.role != self.character.HEALER:
+            return False
+        if 'healing' not in self.character.known_spells:
+            return False
+        if self.blstats.hunger_state >= Hunger.FAINTING:
+            return False
+        if self._last_turn - self.last_cast_fail_turn['healing'] < 2:
+            return False
+        if self.character.spell_fail_chance['healing'] > 0.2:
+            return False
+        hp_ratio = self.blstats.hitpoints / self.blstats.max_hitpoints
+        low_hp = hp_ratio < 0.5 or (self.blstats.hitpoints < 10 and self.blstats.max_hitpoints > 10)
+        return self.blstats.energy >= 5 and low_hp
+
+    def should_cast_extra_heal(self):
+        if 'extra healing' not in self.character.known_spells:
+            return False
+        if self.blstats.hunger_state >= Hunger.FAINTING:
+            return False
+        if self._last_turn - self.last_cast_fail_turn['extra healing'] < 2:
+            return False
+        if self.character.spell_fail_chance['extra healing'] > 0.15:
+            return False
+        hp_ratio = self.blstats.hitpoints / self.blstats.max_hitpoints
+        low_hp = hp_ratio < 0.5 and (self.blstats.max_hitpoints - self.blstats.hitpoints > 25)
+        return self.blstats.energy >= 15 and low_hp
+
     @utils.debug_log('emergency_strategy')
     @Strategy.wrap
     def emergency_strategy(self):
-        if (
-                self.is_safe_to_pray() and
-                (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
-                 * self.blstats.max_hitpoints or self.blstats.hitpoints < 6
-                 or self.blstats.hunger_state >= Hunger.FAINTING)
-        ):
-            yield True
-            self.pray()
-            return
+
+        # if self.should_cast_extra_heal():
+        #     yield True
+        #     self.cast('extra healing', direction=(0, 0))
+        #     return
+
+        # if self.should_cast_heal():
+        #     yield True
+        #     self.cast('healing', direction=(0, 0))
+        #     return
 
         items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
                  item.category == nh.POTION_CLASS and item.object.name in ['healing', 'extra healing', 'full healing']]
         if (
                 (self.blstats.hitpoints < 1 / 3 * self.blstats.max_hitpoints
-                 or self.blstats.hitpoints < 8 or self.blstats.hunger_state >= Hunger.FAINTING) and
-                items
+                 or self.blstats.hitpoints < 8) and items
         ):
             yield True
             self.inventory.quaff(items[0])
             return
+
+        items = [item for item in flatten_items(self.inventory.items) if item.is_unambiguous() and
+                 item.category == nh.POTION_CLASS and item.object.name in ['fruit juice']]
+        if items and self.blstats.hunger_state >= Hunger.FAINTING:
+            yield True
+            self.inventory.quaff(items[0])
+            return
+
+        if (
+                (self.is_safe_to_pray(500) and
+                    (self.blstats.hitpoints < 1 / (5 if self.blstats.experience_level < 6 else 6)
+                        * self.blstats.max_hitpoints or self.blstats.hitpoints < 6))
+                 or (self.is_safe_to_pray(400) and self.blstats.hunger_state >= Hunger.FAINTING)
+        ):
+            yield True
+            self.pray()
+            return
+
 
         # if self.inventory.engraving_below_me.lower() != 'elbereth' and self.can_engrave() and \
         #         (self.blstats.hitpoints < 1 / 5 * self.blstats.max_hitpoints or self.blstats.hitpoints < 5):
@@ -1621,6 +1655,7 @@ class Agent:
                         ((Level.PLANE, 1), (None, None))  # TODO: check level num
                     self.character.parse()
                     self.character.parse_enhance_view()
+                    # self.character.parse_spellcast_view()
                     self.step(A.Command.AUTOPICKUP)
                     if 'Autopickup: ON' in self.message:
                         self.step(A.Command.AUTOPICKUP)
@@ -1636,14 +1671,22 @@ class Agent:
                 inactivity_counter += 1
                 if self.step_count != last_step:
                     inactivity_counter = 0
-                assert inactivity_counter < 5, ('cyclic panic', sorted({p.args[0] for p in self.all_panics[-5:]}))
+
+                if inactivity_counter >= 5:
+                    try:
+                        panics = sorted({p.args[0] for p in self.all_panics[-5:]})
+                    except (TypeError, IndexError):
+                        panics = 'UNKNOWN'
+
+                    raise RuntimeError(f'Cyclic Panic: {panics}')
 
                 try:
-                    self.step(A.Command.ESC)
-                    self.step(A.Command.ESC)
-                    self.on_panic()
-
-                    last_step = self.step_count
+                    try:
+                        self.step(A.Command.ESC)
+                        self.step(A.Command.ESC)
+                        self.on_panic()
+                    finally:
+                        last_step = self.step_count
 
                     self.global_logic.global_strategy().run()
                     assert 0

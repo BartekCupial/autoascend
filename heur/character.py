@@ -7,6 +7,60 @@ from nle.nethack import actions as A
 import objects as O
 
 
+ALL_SPELL_NAMES = [
+    "force bolt",
+    "drain life",
+    "magic missile",
+    "cone of cold",
+    "fireball",
+    "finger of death",
+    "protection",
+    "create monster",
+    "remove curse",
+    "create familiar",
+    "turn undead",
+    "detect monsters",
+    "light",
+    "detect food",
+    "clairvoyance",
+    "detect unseen",
+    "identify",
+    "detect treasure",
+    "magic mapping",
+    "sleep",
+    "confuse monster",
+    "slow monster",
+    "cause fear",
+    "charm monster",
+    "jumping",
+    "haste self",
+    "invisibility",
+    "levitation",
+    "teleport away",
+    "healing",
+    "cure blindness",
+    "cure sickness",
+    "extra healing",
+    "stone to flesh",
+    "restore ability",
+    "knock",
+    "wizard lock",
+    "dig",
+    "polymorph",
+    "cancellation",
+]
+
+ALL_SPELL_CATEGORIES = [
+    "attack",
+    "healing",
+    "divination",
+    "enchantment",
+    "clerical",
+    "escape",
+    "matter",
+]
+
+
 class Property:
     def __init__(self, agent):
         self.agent = agent
@@ -269,6 +323,36 @@ class Character:
         self.alignment = self.name_to_alignment[alignment]
         self.race = self.name_to_race[race]
         self.gender = self.name_to_gender[gender]
+
+    def parse_spellcast_view(self):
+        self.known_spells = dict()
+        self.spell_fail_chance = dict()
+
+        # TODO: parse for other spellcaster classes
+        if self.role not in (self.HEALER, ):
+            return
+
+        with self.agent.atom_operation():
+            self.agent.step(A.Command.CAST)
+            if not self.agent.popup:
+                self.known_spells[self.agent.message] = None
+                return
+            if self.agent.popup[0] not in ('Choose which spell to cast') or \
+                    not self.agent.popup[1].startswith('Name'):
+                raise ValueError(f'Invalid cast popup text format: {self.agent.popup}')
+            for line in self.agent.popup[2:]:
+                matches = re.findall(r'^([a-zA-Z]) - *' +
+                                     r'(' + '|'.join(ALL_SPELL_NAMES) + ') *' +
+                                     r'([0-9]*) *' +
+                                     r'(' + '|'.join(ALL_SPELL_CATEGORIES) + ') *' +
+                                     r'([0-9]*)\% *' +
+                                     r'([0-9]*\%|\(gone\))', line)
+                assert len(matches) == 1, (matches, line)
+                letter, spell_name, level, category, fail, retention = matches[0]
+                assert len(letter) == 1, letter
+                self.known_spells[spell_name] = letter
+                self.spell_fail_chance[spell_name] = int(fail) / 100
+        self.agent.step(A.Command.ESC)
 
     def parse_enhance_view(self):
         with self.agent.atom_operation():
