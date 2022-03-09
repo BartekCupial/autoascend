@@ -23,7 +23,7 @@ from monster_tracker import MonsterTracker, disappearance_mask
 from strategy import Strategy
 
 BLStats = namedtuple('BLStats',
-                     'x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number prop_mask')
+                     'x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number prop_mask align')
 
 RL_CONTEXT_SIZE = 7
 

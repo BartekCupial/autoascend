@@ -5,11 +5,10 @@ import threading
 import time
 import traceback
 
-import aicrowd_gym
 import numpy as np
 from multiprocessing import Pool
 from nle import nethack as nh
-
+import gym
 from agent import Agent
 from character import Character
 
@@ -86,7 +85,7 @@ class EnvWrapper:
 
 def worker(args):
     from_, to_ = args
-    orig_env = aicrowd_gym.make('NetHackChallenge-v0')
+    orig_env = gym.make('NetHackChallenge-v0', save_ttyrec_every=1, savedir="")
 
     scores = []
     for i in range(from_, to_):
