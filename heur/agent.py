@@ -1,6 +1,7 @@
 import json
 import contextlib
 import re
+from copy import deepcopy
 from collections import namedtuple, Counter, defaultdict
 from functools import partial
 from stats_logger import StatsLogger
@@ -87,6 +88,9 @@ class Agent:
         # self._init_fight2_model()
 
         self.stats_logger = StatsLogger()
+        
+        # track all observations, actions, and strategies
+        self._data = {}
 
     @property
     def has_pet(self):
@@ -372,6 +376,13 @@ class Agent:
             assert len(action) == 1
             action = A.ACTIONS[A.ACTIONS.index(ord(action))]
         observation, reward, done, info = self.env.step(action)
+        
+        datum = {key: deepcopy(observation[key]) for key in observation}
+        datum["action"] = str(action)
+        datum["score"] = reward
+
+        self._data[len(self._data)] = datum
+        
         observation = {k: v.copy() for k, v in observation.items()}
         self.step_count += 1
         self.score += reward
