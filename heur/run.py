@@ -84,8 +84,8 @@ class EnvWrapper:
 
 
 def worker(args):
-    from_, to_ = args
-    orig_env = gym.make('NetHackChallenge-v0', save_ttyrec_every=1, savedir="")
+    from_, to_, savedir = args
+    orig_env = gym.make('NetHackChallenge-v0', save_ttyrec_every=1, savedir=savedir)
 
     scores = []
     for i in range(from_, to_):
@@ -108,10 +108,16 @@ if __name__ == "__main__":
     start_time = time.time()
 
     with Pool(NUM_THREADS) as pool:
-        scores = list(pool.map(worker,
-                              [(i * NUM_ASSESSMENTS // NUM_THREADS,
-                                (i + 1) * NUM_ASSESSMENTS // NUM_THREADS)
-                               for i in range(NUM_THREADS)]))
+        scores = list(
+            pool.map(worker, [
+                (
+                    i * NUM_ASSESSMENTS // NUM_THREADS,
+                    (i + 1) * NUM_ASSESSMENTS // NUM_THREADS,
+                    sys.argv[3]
+                )
+                for i in range(NUM_THREADS)
+            ]
+        ))
     scores = [s for ss in scores for s in ss]
 
     print('scores  :', scores, file=sys.stderr)
