@@ -7,12 +7,12 @@ from multiprocessing import Pool
 from pathlib import Path
 from argparse import ArgumentParser
 
-from heur.action_textmap import (
+from action_textmap import (
     nle_comp_preqs,
     nle_obs_preqs,
     special_tokens_interaction_history,
 )
-from heur.instruction_encode_templates import *
+from instruction_encode_templates import *
 
 
 def form_prompt(data, obs_preqs):
@@ -95,7 +95,7 @@ def worker(args):
     scores = []
     for i in range(from_, to_):
         input_dir = input_dirs[i]
-        
+        print(input_dir, file=sys.stderr)
         try:
             faster_load_and_process_chunks(
                 input_dir=input_dir,
