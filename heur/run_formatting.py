@@ -12,7 +12,7 @@ from action_textmap import (
     nle_obs_preqs,
     special_tokens_interaction_history,
 )
-from instruction_encode_templates import *
+from instruction_encode_templates import encode_instruction_example
 
 
 def form_prompt(data, obs_preqs):
