@@ -18,9 +18,9 @@ from nle_language_wrapper.nle_language_obsv import NLELanguageObsv
 
 import gym
 
-from agent import Agent
-from character import Character
-from action_textmap import nle_action_textmap
+from heur.agent import Agent
+from heur.character import Character
+from heur.action_textmap import nle_action_textmap
 
 NH_ACTION_STR_TO_IDX = {str(ACTIONS[i]): i for i in range(len(ACTIONS))}
 NH_ACTION_IDX_TO_STR = {v: k for (k, v) in NH_ACTION_STR_TO_IDX.items()}

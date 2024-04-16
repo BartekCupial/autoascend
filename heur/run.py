@@ -9,8 +9,8 @@ import numpy as np
 from multiprocessing import Pool
 from nle import nethack as nh
 import gym
-from agent import Agent
-from character import Character
+from heur.agent import Agent
+from heur.character import Character
 
 
 class AgentStepTimeout(KeyboardInterrupt):

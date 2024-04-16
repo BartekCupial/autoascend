@@ -7,6 +7,8 @@ from multiprocessing import Pool
 from pathlib import Path
 from argparse import ArgumentParser
 
+import numpy as np
+
 from heur.action_textmap import (
     nle_comp_preqs,
     nle_obs_preqs,
@@ -33,6 +35,8 @@ def form_prompt(data, obs_preqs):
 def faster_load_and_process_chunks(
     input_dir,
     output_dir,
+    seq,
+    nsamples,
     observation_tok=special_tokens_interaction_history["observation"],
     obs_preqs=nle_obs_preqs,
     comp_preqs=nle_comp_preqs,
@@ -81,16 +85,25 @@ def faster_load_and_process_chunks(
             for i, dataum in enumerate(reader):
                 chunks += [dataum]
 
-            raw_histories = process_helper_raw_observation(chunks[1:])
+            if nsamples // 10 * seq > len(chunks):
+                print(f"not enough data in trajectory: {file}, skipping", file=sys.stderr)
+                continue
 
-            with jsonlines.open(output_file, "a") as writer:
-                writer.write_all([raw_histories])
+            # len(chunks) - (seq + 1) since we don't want to start too end into the trajectory
+            # +1 in (seq + 1) and + 1 at the end to exclude the 0th index
+            begginings = np.random.choice(len(chunks) - (seq + 1), size=nsamples) + 1
+
+            for beggining in begginings:
+                raw_histories = process_helper_raw_observation(chunks[beggining : beggining + seq])
+
+                with jsonlines.open(output_file, "a") as writer:
+                    writer.write_all([raw_histories])
 
     return 1
 
 
 def worker(args):
-    from_, to_, input_dirs, output_dir = args
+    from_, to_, input_dirs, output_dir, seq, nsamples = args
     
     scores = []
     for i in range(from_, to_):
@@ -100,6 +113,8 @@ def worker(args):
             faster_load_and_process_chunks(
                 input_dir=input_dir,
                 output_dir=output_dir,
+                seq=seq, 
+                nsamples=nsamples,
             )
         except BaseException as e:
             print(''.join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
@@ -117,6 +132,8 @@ def parse_args():
         "--output_dir",
         type=str,
     )
+    parser.add_argument("--seq", default=128, type=int)
+    parser.add_argument("--nsamples", default=500000, type=int)
     parser.add_argument("--num_workers", default=16, type=int)
 
     args = parser.parse_args()
@@ -138,6 +155,8 @@ if __name__ == "__main__":
                     (i + 1) * len(directories) // args.num_workers,
                     directories,
                     args.output_dir,
+                    args.seq,
+                    args.nsamples,
                 )
                 for i in range(args.num_workers)
             ]

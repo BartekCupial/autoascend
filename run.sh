@@ -1,2 +1,2 @@
 #!/bin/bash
-python3 heur/run.py 4096 8 nle_data
+python3 -m heur.run 4096 8 nle_data
