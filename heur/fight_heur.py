@@ -5,10 +5,10 @@ import nle.nethack as nh
 import numpy as np
 from scipy import signal
 
-import objects as O
-import utils
-from glyph import G
-from item import flatten_items
+import heur.objects as O
+import heur.utils as utils
+from heur.glyph import G
+from heur.item import flatten_items
 
 ONLY_RANGED_SLOW_MONSTERS = ['floating eye', 'blue jelly', 'brown mold', 'gas spore', 'acid blob']
 # COLD_MONSTERS = ['brown mold']

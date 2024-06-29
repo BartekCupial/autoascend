@@ -5,12 +5,12 @@ import numpy as np
 from nle import nethack as nh
 from nle.nethack import actions as A
 
-import utils
-from character import Character
-from exceptions import AgentPanic
-from glyph import G, C, SS
-from level import Level
-from strategy import Strategy
+import heur.utils as utils
+from heur.character import Character
+from heur.exceptions import AgentPanic
+from heur.glyph import G, C, SS
+from heur.level import Level
+from heur.strategy import Strategy
 
 
 class ExplorationLogic:

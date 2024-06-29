@@ -1,6 +1,6 @@
 import numpy as np
 
-import utils
+import heur.utils as utils
 
 
 # Maps are from https://nethackwiki.com/wiki/Sokoban#Level_descriptions
