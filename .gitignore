@@ -1,5 +1,9 @@
 nle_data
 text_data
+saves
+processed_data
+demos
+*.sif
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
