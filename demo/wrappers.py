@@ -1,10 +1,9 @@
 import contextlib
 import ctypes
+import os
 import pickle
 import threading
 import time
-import os
-
 from pathlib import Path
 
 import gym
@@ -22,9 +21,7 @@ class NLEDemo(gym.Wrapper):
 
     def __init__(self, env, gamesavedir):
         super().__init__(env)
-        self.action_space = spaces.Discrete(
-            env.unwrapped.action_space.n + 1
-        )  # add "time travel" action
+        self.action_space = spaces.Discrete(env.unwrapped.action_space.n + 1)  # add "time travel" action
         self.save_every_k = 100
         self.gamesavedir = gamesavedir
         self.savedir = Path(gamesavedir) / Path(self.env.nethack._ttyrec).stem
@@ -53,12 +50,8 @@ class NLEDemo(gym.Wrapper):
         if not done:
             if (
                 len(self.checkpoint_action_nr) > 0
-                and len(self.actions)
-                >= self.checkpoint_action_nr[-1] + self.save_every_k
-            ) or (
-                len(self.checkpoint_action_nr) == 0
-                and len(self.actions) >= self.save_every_k
-            ):
+                and len(self.actions) >= self.checkpoint_action_nr[-1] + self.save_every_k
+            ) or (len(self.checkpoint_action_nr) == 0 and len(self.actions) >= self.save_every_k):
                 self.save_checkpoint()
 
         return obs, reward, done, info
@@ -98,7 +91,7 @@ class NLEDemo(gym.Wrapper):
 
     def save_checkpoint(self):
         i = len(self.actions)
-        
+
         chk_pth = self.savedir / f"ckpt_{i}"
         self.env.save(gamesavedir=chk_pth)
         self.checkpoints.append(chk_pth)
@@ -106,9 +99,7 @@ class NLEDemo(gym.Wrapper):
 
     def restore_past_state(self):
         self.actions = self.actions[: -self.steps_in_the_past]
-        while len(self.checkpoints) > 0 and self.checkpoint_action_nr[-1] > len(
-            self.actions
-        ):
+        while len(self.checkpoints) > 0 and self.checkpoint_action_nr[-1] > len(self.actions):
             self.checkpoints.pop()
             self.checkpoint_action_nr.pop()
         self.load_state_and_walk_forward()

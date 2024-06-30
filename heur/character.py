@@ -6,7 +6,6 @@ from nle.nethack import actions as A
 
 import heur.objects as O
 
-
 ALL_SPELL_NAMES = [
     "force bolt",
     "drain life",
@@ -67,19 +66,19 @@ class Property:
 
     @property
     def confusion(self):
-        return 'Conf' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return "Conf" in bytes(self.agent.last_observation["tty_chars"][-1]).decode()
 
     @property
     def stun(self):
-        return 'Stun' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return "Stun" in bytes(self.agent.last_observation["tty_chars"][-1]).decode()
 
     @property
     def hallu(self):
-        return 'Hallu' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return "Hallu" in bytes(self.agent.last_observation["tty_chars"][-1]).decode()
 
     @property
     def blind(self):
-        return 'Blind' in bytes(self.agent.last_observation['tty_chars'][-1]).decode()
+        return "Blind" in bytes(self.agent.last_observation["tty_chars"][-1]).decode()
 
     @property
     def polymorph(self):
@@ -106,21 +105,21 @@ class Character:
     WIZARD = 12
 
     name_to_role = {
-        'Archeologist': ARCHEOLOGIST,
-        'Barbarian': BARBARIAN,
-        'Caveman': CAVEMAN,
-        'Cavewoman': CAVEMAN,
-        'Healer': HEALER,
-        'Knight': KNIGHT,
-        'Monk': MONK,
-        'Priest': PRIEST,
-        'Priestess': PRIEST,
-        'Ranger': RANGER,
-        'Rogue': ROGUE,
-        'Samurai': SAMURAI,
-        'Tourist': TOURIST,
-        'Valkyrie': VALKYRIE,
-        'Wizard': WIZARD,
+        "Archeologist": ARCHEOLOGIST,
+        "Barbarian": BARBARIAN,
+        "Caveman": CAVEMAN,
+        "Cavewoman": CAVEMAN,
+        "Healer": HEALER,
+        "Knight": KNIGHT,
+        "Monk": MONK,
+        "Priest": PRIEST,
+        "Priestess": PRIEST,
+        "Ranger": RANGER,
+        "Rogue": ROGUE,
+        "Samurai": SAMURAI,
+        "Tourist": TOURIST,
+        "Valkyrie": VALKYRIE,
+        "Wizard": WIZARD,
     }
 
     CHAOTIC = 0
@@ -129,10 +128,10 @@ class Character:
     UNALIGNED = 3
 
     name_to_alignment = {
-        'chaotic': CHAOTIC,
-        'neutral': NEUTRAL,
-        'lawful': LAWFUL,
-        'unaligned': UNALIGNED,
+        "chaotic": CHAOTIC,
+        "neutral": NEUTRAL,
+        "lawful": LAWFUL,
+        "unaligned": UNALIGNED,
     }
 
     HUMAN = 0
@@ -142,23 +141,23 @@ class Character:
     ORC = 4
 
     name_to_race = {
-        'human': HUMAN,
-        'dwarf': DWARF,
-        'dwarven': DWARF,
-        'elf': ELF,
-        'elven': ELF,
-        'gnome': GNOME,
-        'gnomish': GNOME,
-        'orc': ORC,
-        'orcish': ORC,
+        "human": HUMAN,
+        "dwarf": DWARF,
+        "dwarven": DWARF,
+        "elf": ELF,
+        "elven": ELF,
+        "gnome": GNOME,
+        "gnomish": GNOME,
+        "orc": ORC,
+        "orcish": ORC,
     }
 
     MALE = 0
     FEMALE = 1
 
     name_to_gender = {
-        'male': MALE,
-        'female': FEMALE,
+        "male": MALE,
+        "female": FEMALE,
     }
 
     name_to_skill_type = {
@@ -191,7 +190,6 @@ class Character:
         "boomerang": O.P_BOOMERANG,
         "whip": O.P_WHIP,
         "unicorn horn": O.P_UNICORN_HORN,
-
         "attack spells": O.P_ATTACK_SPELL,
         "healing spells": O.P_HEALING_SPELL,
         "divination spells": O.P_DIVINATION_SPELL,
@@ -199,15 +197,14 @@ class Character:
         "clerical spells": O.P_CLERIC_SPELL,
         "escape spells": O.P_ESCAPE_SPELL,
         "matter spells": O.P_MATTER_SPELL,
-
         "bare handed combat": O.P_BARE_HANDED_COMBAT,
         "martial arts": O.P_BARE_HANDED_COMBAT,
         "two weapon combat": O.P_TWO_WEAPON_COMBAT,
         "riding": O.P_RIDING,
     }
 
-    possible_skill_types = ['Fighting Skills', 'Weapon Skills', 'Spellcasting Skills']
-    possible_skill_levels = ['Unskilled', 'Basic', 'Skilled', 'Expert', 'Master', 'Grand Master']
+    possible_skill_types = ["Fighting Skills", "Weapon Skills", "Spellcasting Skills"]
+    possible_skill_levels = ["Unskilled", "Basic", "Skilled", "Expert", "Master", "Grand Master"]
 
     SKILL_LEVEL_RESTRICTED = 0
     SKILL_LEVEL_UNSKILLED = 1
@@ -257,11 +254,21 @@ class Character:
         SKILL_LEVEL_GRAND_MASTER: (7, 9),
     }
 
-    name_to_skill_level = {k: v for k, v in zip(['Restricted'] + possible_skill_levels,
-                                                [SKILL_LEVEL_RESTRICTED,
-                                                 SKILL_LEVEL_UNSKILLED, SKILL_LEVEL_BASIC, SKILL_LEVEL_SKILLED,
-                                                 SKILL_LEVEL_EXPERT,
-                                                 SKILL_LEVEL_MASTER, SKILL_LEVEL_GRAND_MASTER])}
+    name_to_skill_level = {
+        k: v
+        for k, v in zip(
+            ["Restricted"] + possible_skill_levels,
+            [
+                SKILL_LEVEL_RESTRICTED,
+                SKILL_LEVEL_UNSKILLED,
+                SKILL_LEVEL_BASIC,
+                SKILL_LEVEL_SKILLED,
+                SKILL_LEVEL_EXPERT,
+                SKILL_LEVEL_MASTER,
+                SKILL_LEVEL_GRAND_MASTER,
+            ],
+        )
+    }
 
     def __init__(self, agent):
         self.agent = agent
@@ -277,9 +284,9 @@ class Character:
         self.is_lycanthrope = False
 
     def update(self):
-        if 'You feel feverish.' in self.agent.message:
+        if "You feel feverish." in self.agent.message:
             self.is_lycanthrope = True
-        if 'You feel purified.' in self.agent.message:
+        if "You feel purified." in self.agent.message:
             self.is_lycanthrope = False
 
     @property
@@ -290,32 +297,32 @@ class Character:
     def parse(self):
         with self.agent.atom_operation():
             self.agent.step(A.Command.ATTRIBUTES)
-            text = ' '.join(self.agent.popup)
+            text = " ".join(self.agent.popup)
             self._parse(text)
             self.self_glyph = self.agent.glyphs[self.agent.blstats.y, self.agent.blstats.x]
 
     def _parse(self, text):
-        matches = re.findall('You are a ([a-z]+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+).', text)
+        matches = re.findall("You are a ([a-z]+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+).", text)
         if len(matches) == 1:
             alignment, _, gender, race, role = matches[0]
         else:
             matches = re.findall(
-                'You are an? ([a-zA-Z ]+), a level (\d+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+). *You are ([a-z]+)',
-                text)
+                "You are an? ([a-zA-Z ]+), a level (\d+) (([a-z]+) )?([a-z]+) ([A-Z][a-z]+). *You are ([a-z]+)", text
+            )
             assert len(matches) == 1, repr(text)
             _, _, _, gender, race, role, alignment = matches[0]
 
         if not gender:
-            if role == 'Priestess':
-                gender = 'female'
-            elif role == 'Priest':
-                gender = 'male'
-            elif role == 'Caveman':
-                gender = 'male'
-            elif role == 'Cavewoman':
-                gender = 'female'
-            elif role == 'Valkyrie':
-                gender = 'female'
+            if role == "Priestess":
+                gender = "female"
+            elif role == "Priest":
+                gender = "male"
+            elif role == "Caveman":
+                gender = "male"
+            elif role == "Cavewoman":
+                gender = "female"
+            elif role == "Valkyrie":
+                gender = "female"
             else:
                 assert 0, repr(text)
 
@@ -329,7 +336,7 @@ class Character:
         self.spell_fail_chance = dict()
 
         # TODO: parse for other spellcaster classes
-        if self.role not in (self.HEALER, ):
+        if self.role not in (self.HEALER,):
             return
 
         with self.agent.atom_operation():
@@ -337,16 +344,22 @@ class Character:
             if not self.agent.popup:
                 self.known_spells[self.agent.message] = None
                 return
-            if self.agent.popup[0] not in ('Choose which spell to cast') or \
-                    not self.agent.popup[1].startswith('Name'):
-                raise ValueError(f'Invalid cast popup text format: {self.agent.popup}')
+            if self.agent.popup[0] not in ("Choose which spell to cast") or not self.agent.popup[1].startswith("Name"):
+                raise ValueError(f"Invalid cast popup text format: {self.agent.popup}")
             for line in self.agent.popup[2:]:
-                matches = re.findall(r'^([a-zA-Z]) - *' +
-                                     r'(' + '|'.join(ALL_SPELL_NAMES) + ') *' +
-                                     r'([0-9]*) *' +
-                                     r'(' + '|'.join(ALL_SPELL_CATEGORIES) + ') *' +
-                                     r'([0-9]*)\% *' +
-                                     r'([0-9]*\%|\(gone\))', line)
+                matches = re.findall(
+                    r"^([a-zA-Z]) - *"
+                    + r"("
+                    + "|".join(ALL_SPELL_NAMES)
+                    + ") *"
+                    + r"([0-9]*) *"
+                    + r"("
+                    + "|".join(ALL_SPELL_CATEGORIES)
+                    + ") *"
+                    + r"([0-9]*)\% *"
+                    + r"([0-9]*\%|\(gone\))",
+                    line,
+                )
                 assert len(matches) == 1, (matches, line)
                 letter, spell_name, level, category, fail, retention = matches[0]
                 assert len(letter) == 1, letter
@@ -362,10 +375,12 @@ class Character:
                 to_upgrade = self.select_skill_to_upgrade()
                 old_skill_level = self.skill_levels.copy()
                 letter = self.upgradable_skills[to_upgrade]
+
                 def type_letter():
-                    while f'{letter} - ' not in '\n'.join(self.agent.single_popup):
+                    while f"{letter} - " not in "\n".join(self.agent.single_popup):
                         yield A.TextCharacters.SPACE
                     yield letter
+
                 self.agent.step(A.Command.ENHANCE, type_letter())
 
                 self.agent.step(A.Command.ENHANCE)
@@ -378,19 +393,28 @@ class Character:
         return next(iter(self.upgradable_skills.keys()))
 
     def _parse_enhance_view(self):
-        if self.agent.popup[0] not in ('Current skills:', 'Pick a skill to advance:'):
-            raise ValueError('Invalid ehance popup text format.' + str(self.agent.popup))
+        if self.agent.popup[0] not in ("Current skills:", "Pick a skill to advance:"):
+            raise ValueError("Invalid ehance popup text format." + str(self.agent.popup))
         self.upgradable_skills = dict()
         for line in self.agent.popup[1:]:
-            if line.strip() in self.possible_skill_types or \
-                    line.strip() == '(Skill flagged by "#" cannot be enhanced any further.)' or \
-                    line.strip() == '(Skills flagged by "#" cannot be enhanced any further.)' or \
-                    line.strip() == '(Skill flagged by "*" may be enhanced when you\'re more experienced.)' or \
-                    line.strip() == '(Skills flagged by "*" may be enhanced when you\'re more experienced.)':
+            if (
+                line.strip() in self.possible_skill_types
+                or line.strip() == '(Skill flagged by "#" cannot be enhanced any further.)'
+                or line.strip() == '(Skills flagged by "#" cannot be enhanced any further.)'
+                or line.strip() == '(Skill flagged by "*" may be enhanced when you\'re more experienced.)'
+                or line.strip() == '(Skills flagged by "*" may be enhanced when you\'re more experienced.)'
+            ):
                 continue
-            matches = re.findall(r'^([a-zA-Z] -)?#?\*? *' +
-                                 r'(' + '|'.join(self.name_to_skill_type.keys()) + ') *' +
-                                 r'\[(' + '|'.join(self.possible_skill_levels) + ')\]', line)
+            matches = re.findall(
+                r"^([a-zA-Z] -)?#?\*? *"
+                + r"("
+                + "|".join(self.name_to_skill_type.keys())
+                + ") *"
+                + r"\[("
+                + "|".join(self.possible_skill_levels)
+                + ")\]",
+                line,
+            )
             assert len(matches) == 1, (matches, line)
             letter, skill_type, skill_level = matches[0]
             if letter:
@@ -468,7 +492,7 @@ class Character:
         return bonus
 
     def _get_weapon_skill_bonus(self, item):
-        """ Retuns a pair (to hit bonus, damage bonus) """
+        """Retuns a pair (to hit bonus, damage bonus)"""
 
         if item is None:
             if self.role in (self.MONK, self.SAMURAI):
@@ -483,7 +507,7 @@ class Character:
             sub = abs(item.objs[0].sub)
 
             if not (0 <= sub < len(self.skill_levels)):
-                raise ValueError('Invalid item sub: ' + str(item) + ' sub: ' + str(sub))
+                raise ValueError("Invalid item sub: " + str(item) + " sub: " + str(sub))
             # TODO:
             return self.weapon_bonus[self.skill_levels[sub]]
 
@@ -514,9 +538,9 @@ class Character:
         return 7
 
     def get_melee_bonus(self, item, monster=None, large_monster=False):
-        """ Returns a pair (to_hit, damaga)
+        """Returns a pair (to_hit, damaga)
         https://github.com/facebookresearch/nle/blob/master/src/uhitm.c : find_roll_to_hit
-         """
+        """
         if monster is not None:
             raise NotImplementedError()
 
@@ -596,7 +620,7 @@ class Character:
         roll_offset += skill_hit_bonus
 
         if item is not None:
-            if item.is_launcher() or item.is_fired_projectile() or item.objs[0].name in ['dart', 'shuriken']:
+            if item.is_launcher() or item.is_fired_projectile() or item.objs[0].name in ["dart", "shuriken"]:
                 # TODO: rocks, boomerang
                 dmg_bonus = 1.5  # 1d2
             else:
@@ -610,21 +634,33 @@ class Character:
     def get_skill_str_list(self):
         inv_skill_type = {v: k for k, v in self.name_to_skill_type.items()}
         inv_skill_level = {v: k for k, v in self.name_to_skill_level.items()}
-        return list(inv_skill_type[skill_type] + '-' + inv_skill_level[level]
-                    for skill_type, level in enumerate(self.skill_levels)
-                    if level in inv_skill_level and skill_type in inv_skill_type and level != 0)
+        return list(
+            inv_skill_type[skill_type] + "-" + inv_skill_level[level]
+            for skill_type, level in enumerate(self.skill_levels)
+            if level in inv_skill_level and skill_type in inv_skill_type and level != 0
+        )
 
     def __str__(self):
         if self.role is None:
-            return 'unparsed_character'
-        skill_str = '| '.join(self.get_skill_str_list())
+            return "unparsed_character"
+        skill_str = "| ".join(self.get_skill_str_list())
         if self.upgradable_skills:
             inv_skill_type = {v: k for k, v in self.name_to_skill_type.items()}
-            skill_str += '\n Upgradable: ' + '|'.join(letter + '-' + inv_skill_type[skill]
-                                                      for skill, letter in self.upgradable_skills.items())
-        return '-'.join([f'{list(d.keys())[list(d.values()).index(v)][:3].lower()}'
-                         for d, v in [(self.name_to_role, self.role),
-                                      (self.name_to_race, self.race),
-                                      (self.name_to_gender, self.gender),
-                                      (self.name_to_alignment, self.alignment),
-                                      ]]) + '\n Skills: ' + skill_str
+            skill_str += "\n Upgradable: " + "|".join(
+                letter + "-" + inv_skill_type[skill] for skill, letter in self.upgradable_skills.items()
+            )
+        return (
+            "-".join(
+                [
+                    f"{list(d.keys())[list(d.values()).index(v)][:3].lower()}"
+                    for d, v in [
+                        (self.name_to_role, self.role),
+                        (self.name_to_race, self.race),
+                        (self.name_to_gender, self.gender),
+                        (self.name_to_alignment, self.alignment),
+                    ]
+                ]
+            )
+            + "\n Skills: "
+            + skill_str
+        )

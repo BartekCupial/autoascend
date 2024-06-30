@@ -8,7 +8,7 @@ from nle.nethack import actions as A
 import heur.utils as utils
 from heur.character import Character
 from heur.exceptions import AgentPanic
-from heur.glyph import G, C, SS
+from heur.glyph import SS, C, G
 from heur.level import Level
 from heur.strategy import Strategy
 
@@ -31,7 +31,7 @@ class ExplorationLogic:
             if t is None:
                 continue
             glyph = self.agent.levels[start].objects[k]
-            dir = '>' if glyph in G.STAIR_DOWN else '<' if glyph in G.STAIR_UP else ''
+            dir = ">" if glyph in G.STAIR_DOWN else "<" if glyph in G.STAIR_UP else ""
             assert dir, glyph  # TODO: portals
 
             path.append((k, t, dir))
@@ -63,22 +63,24 @@ class ExplorationLogic:
             return set()
 
         if any((dun == dungeon_number for dun, lev in achievable_levels)):
-            closest_level_number = min((lev for dun, lev in achievable_levels if dun == dungeon_number),
-                                       key=lambda lev: abs(level_number - lev))
+            closest_level_number = min(
+                (lev for dun, lev in achievable_levels if dun == dungeon_number),
+                key=lambda lev: abs(level_number - lev),
+            )
             return {(dungeon_number, closest_level_number)}
 
         if dungeon_number == Level.GNOMISH_MINES:
-            return set.union(*[self.levels_to_explore_to_get_to(Level.DUNGEONS_OF_DOOM, i, achievable_levels)
-                               for i in range(2, 5)],
-                             {(Level.DUNGEONS_OF_DOOM, i) for i in range(2, 5)
-                              if (Level.DUNGEONS_OF_DOOM, i) in achievable_levels})
+            return set.union(
+                *[self.levels_to_explore_to_get_to(Level.DUNGEONS_OF_DOOM, i, achievable_levels) for i in range(2, 5)],
+                {(Level.DUNGEONS_OF_DOOM, i) for i in range(2, 5) if (Level.DUNGEONS_OF_DOOM, i) in achievable_levels},
+            )
 
         if dungeon_number == Level.SOKOBAN:
             # TODO: one level below oracle
-            return set.union(*[self.levels_to_explore_to_get_to(Level.DUNGEONS_OF_DOOM, i, achievable_levels)
-                               for i in range(6, 11)],
-                             {(Level.DUNGEONS_OF_DOOM, i) for i in range(6, 11)
-                              if (Level.DUNGEONS_OF_DOOM, i) in achievable_levels})
+            return set.union(
+                *[self.levels_to_explore_to_get_to(Level.DUNGEONS_OF_DOOM, i, achievable_levels) for i in range(6, 11)],
+                {(Level.DUNGEONS_OF_DOOM, i) for i in range(6, 11) if (Level.DUNGEONS_OF_DOOM, i) in achievable_levels},
+            )
 
         if all((dun == Level.GNOMISH_MINES for dun, lev in achievable_levels)):
             return self.levels_to_explore_to_get_to(Level.GNOMISH_MINES, 1).union(
@@ -105,17 +107,21 @@ class ExplorationLogic:
 
         y, x = list(unexplored_stairs)[self.agent.rng.randint(0, len(unexplored_stairs))]
         glyph = self.agent.current_level().objects[y, x]
-        dir = '>' if glyph in G.STAIR_DOWN else '<' if glyph in G.STAIR_UP else ''
+        dir = ">" if glyph in G.STAIR_DOWN else "<" if glyph in G.STAIR_UP else ""
         assert dir, glyph  # TODO: portals
 
         go_to_strategy(y, x).run()
         assert (self.agent.blstats.y, self.agent.blstats.x) == (y, x)
         while self.agent.has_pet:
-            if utils.any_in(self.agent.glyphs[max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
-                                              max(self.agent.blstats.x - 1, 0) : self.agent.blstats.x + 2],
-                            G.PETS):
+            if utils.any_in(
+                self.agent.glyphs[
+                    max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
+                    max(self.agent.blstats.x - 1, 0) : self.agent.blstats.x + 2,
+                ],
+                G.PETS,
+            ):
                 break
-            self.agent.move('.')
+            self.agent.move(".")
         self.agent.move(dir)
 
     @Strategy.wrap
@@ -127,11 +133,15 @@ class ExplorationLogic:
             go_to_strategy(y, x).run()
             assert (self.agent.blstats.y, self.agent.blstats.x) == (y, x)
             while self.agent.has_pet:
-                if utils.any_in(self.agent.glyphs[max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
-                                                max(self.agent.blstats.x - 1, 0) : self.agent.blstats.x + 2],
-                                G.PETS):
+                if utils.any_in(
+                    self.agent.glyphs[
+                        max(self.agent.blstats.y - 1, 0) : self.agent.blstats.y + 2,
+                        max(self.agent.blstats.x - 1, 0) : self.agent.blstats.x + 2,
+                    ],
+                    G.PETS,
+                ):
                     break
-                self.agent.move('.')
+                self.agent.move(".")
             self.agent.move(dir)
 
     @Strategy.wrap
@@ -155,8 +165,10 @@ class ExplorationLogic:
                         exploration_levels[level] -= 10000
 
                 min_exploration_level = min(exploration_levels.values())
-                if self.agent.current_level().key() in levels_to_search and \
-                        exploration_levels[self.agent.current_level().key()] < min_exploration_level + 150:
+                if (
+                    self.agent.current_level().key() in levels_to_search
+                    and exploration_levels[self.agent.current_level().key()] < min_exploration_level + 150
+                ):
                     yield False
                 yield True
 
@@ -176,16 +188,24 @@ class ExplorationLogic:
                 assert self.agent.current_level().key() in levels_to_search
                 continue
 
-            explore_strategy.preempt(self.agent, [
-                self.explore_stairs(go_to_strategy, all=True) \
-                        .condition(lambda: self.agent.current_level().key() in levels_to_search),
-                go_to_least_explored_level(),
-            ], continue_after_preemption=False).run()
+            explore_strategy.preempt(
+                self.agent,
+                [
+                    self.explore_stairs(go_to_strategy, all=True).condition(
+                        lambda: self.agent.current_level().key() in levels_to_search
+                    ),
+                    go_to_least_explored_level(),
+                ],
+                continue_after_preemption=False,
+            ).run()
 
         path = self.get_path_to_level(dungeon_number, level_number)
-        assert path is not None, \
-                (self.agent.current_level().key(), (dungeon_number, level_number), self.get_achievable_levels())
-        with self.agent.env.debug_log(f'going to level {Level.dungeon_names[dungeon_number]}:{level_number}'):
+        assert path is not None, (
+            self.agent.current_level().key(),
+            (dungeon_number, level_number),
+            self.get_achievable_levels(),
+        )
+        with self.agent.env.debug_log(f"going to level {Level.dungeon_names[dungeon_number]}:{level_number}"):
             self.follow_level_path_strategy(path, go_to_strategy).run()
             assert self.agent.current_level().key() == (dungeon_number, level_number)
 
@@ -205,7 +225,7 @@ class ExplorationLogic:
                 continue
             c = level.search_count[max(y - 1, 0) : y + 2, max(x - 1, 0) : x + 2].sum()
 
-            if (self.agent.last_observation['specials'][y, x] & nh.MG_OBJPILE) == 0:
+            if (self.agent.last_observation["specials"][y, x] & nh.MG_OBJPILE) == 0:
                 search_count = max(search_count, offset - c)
                 continue
 
@@ -227,7 +247,9 @@ class ExplorationLogic:
             yield True
             with self.agent.atom_operation():
                 self.agent.step(A.Command.LOOK)
-                r = re.search(r'There is an altar to [a-zA-Z- ]+ \(([a-z]+)\) here.', self.agent.message or self.agent.popup[0])
+                r = re.search(
+                    r"There is an altar to [a-zA-Z- ]+ \(([a-z]+)\) here.", self.agent.message or self.agent.popup[0]
+                )
                 assert r is not None, (self.agent.message, self.agent.popup)
                 alignment = r.groups()[0]
                 assert alignment in Character.name_to_alignment, (alignment, self.agent.message)
@@ -237,7 +259,7 @@ class ExplorationLogic:
 
         yield False
 
-    @utils.debug_log('patrol')
+    @utils.debug_log("patrol")
     @Strategy.wrap
     def patrol(self):
         yielded = False
@@ -252,15 +274,23 @@ class ExplorationLogic:
                 yield True
                 yielded = True
 
-
-            i = self.agent.rng.choice(range(reachable.shape[0] * reachable.shape[1]), p=(reachable.reshape(-1) / reachable.sum()))
+            i = self.agent.rng.choice(
+                range(reachable.shape[0] * reachable.shape[1]), p=(reachable.reshape(-1) / reachable.sum())
+            )
             y, x = i // reachable.shape[1], i % reachable.shape[1]
             self.agent.go_to(y, x, fast=True)
 
-    @utils.debug_log('explore1')
-    def explore1(self, search_prio_limit=0, door_open_count=4, kick_doors=True, trap_search_offset=0, check_altar_alignment=True, fast_go_to=False):
+    @utils.debug_log("explore1")
+    def explore1(
+        self,
+        search_prio_limit=0,
+        door_open_count=4,
+        kick_doors=True,
+        trap_search_offset=0,
+        check_altar_alignment=True,
+        fast_go_to=False,
+    ):
         # TODO: refactor entire function
-
 
         @Strategy.wrap
         def open_neighbor_doors():
@@ -268,14 +298,15 @@ class ExplorationLogic:
 
             yielded = False
             for py, px in self.agent.neighbors(self.agent.blstats.y, self.agent.blstats.x, diagonal=False):
-                if (self.agent.current_level().door_open_count[py, px] < door_open_count or kick_doors) and \
-                        self.agent.glyphs[py, px] in G.DOOR_CLOSED:
+                if (
+                    self.agent.current_level().door_open_count[py, px] < door_open_count or kick_doors
+                ) and self.agent.glyphs[py, px] in G.DOOR_CLOSED:
                     if not yielded:
                         yielded = True
                         yield True
                     with self.agent.panic_if_position_changes():
                         if not self.agent.open_door(py, px):
-                            if not 'locked' in self.agent.message:
+                            if not "locked" in self.agent.message:
                                 for _ in range(6):
                                     if self.agent.open_door(py, px):
                                         break
@@ -316,20 +347,23 @@ class ExplorationLogic:
 
             prio = np.zeros((C.SIZE_Y, C.SIZE_X), np.float32)
             prio[:] = -1
-            prio -= level.search_count ** 2 * 2
+            prio -= level.search_count**2 * 2
 
             counts = level.search_count[level.search_count > 0]
             search_diff = 0
             if len(counts):
                 search_diff = np.max(counts) - np.quantile(counts, 0.3)
-                self.agent.stats_logger.log_max_value('search_diff', search_diff)
+                self.agent.stats_logger.log_max_value("search_diff", search_diff)
 
-            if search_diff > 400 and self.agent.blstats.hitpoints == self.agent.blstats.max_hitpoints\
-                    and level.search_count[self.agent.blstats.y, self.agent.blstats.x] == np.max(counts):
-                self.agent.stats_logger.log_event('allow_walk_traps')
+            if (
+                search_diff > 400
+                and self.agent.blstats.hitpoints == self.agent.blstats.max_hitpoints
+                and level.search_count[self.agent.blstats.y, self.agent.blstats.x] == np.max(counts)
+            ):
+                self.agent.stats_logger.log_event("allow_walk_traps")
                 self.agent._allow_walking_through_traps_turn = self.agent._last_turn
                 if search_diff > 500:
-                    self.agent.stats_logger.log_event('allow_attack_all')
+                    self.agent.stats_logger.log_event("allow_attack_all")
                     self.agent._allow_attack_all_turn = self.agent._last_turn
 
             # is_on_corridor = utils.isin(level.objects, G.CORRIDOR)
@@ -346,8 +380,15 @@ class ExplorationLogic:
                         walls += utils.isin(utils.translate(level.objects, dy, dx, out=tmp), G.WALL)
 
             prio += (is_on_door & (stones > 3)) * 250
-            prio += (np.stack([utils.translate(level.walkable, y, x, out=tmp).astype(np.int32)
-                               for y, x in [(1, 0), (-1, 0), (0, 1), (0, -1)]]).sum(0) <= 1) * 250
+            prio += (
+                np.stack(
+                    [
+                        utils.translate(level.walkable, y, x, out=tmp).astype(np.int32)
+                        for y, x in [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    ]
+                ).sum(0)
+                <= 1
+            ) * 250
             prio[(stones == 0) & (walls == 0)] = -np.inf
 
             prio[~level.walkable | (dis == -1)] = -np.inf
@@ -425,10 +466,19 @@ class ExplorationLogic:
                 target_y, target_x = nonzero_y[i], nonzero_x[i]
 
                 with self.agent.env.debug_tiles(to_explore, color=(0, 0, 255, 64)):
-                    self.agent.go_to(target_y, target_x, fast=fast_go_to, debug_tiles_args=dict(
-                        color=(255 * bool(to_visit[target_y, target_x]),
-                               255, 255 * bool(to_search[target_y, target_x])),
-                        is_path=True))
+                    self.agent.go_to(
+                        target_y,
+                        target_x,
+                        fast=fast_go_to,
+                        debug_tiles_args=dict(
+                            color=(
+                                255 * bool(to_visit[target_y, target_x]),
+                                255,
+                                255 * bool(to_search[target_y, target_x]),
+                            ),
+                            is_path=True,
+                        ),
+                    )
                     if to_search[target_y, target_x] and not to_visit[target_y, target_x]:
                         self.agent.search(5)
 
@@ -436,13 +486,19 @@ class ExplorationLogic:
 
         return (
             open_visit_search(search_prio_limit)
-            .preempt(self.agent, [
-                self.agent.inventory.gather_items(),
-                self.untrap_traps().every(10),
-            ])
-            .preempt(self.agent, [
-                self.search_neighbors_for_traps(trap_search_offset),
-            ])
+            .preempt(
+                self.agent,
+                [
+                    self.agent.inventory.gather_items(),
+                    self.untrap_traps().every(10),
+                ],
+            )
+            .preempt(
+                self.agent,
+                [
+                    self.search_neighbors_for_traps(trap_search_offset),
+                ],
+            )
         )
 
     def worth_untrapping(self, trap_y, trap_x):
@@ -461,7 +517,7 @@ class ExplorationLogic:
         assert walkable_changes % 2 == 0
         return walkable_changes >= 4
 
-    @utils.debug_log('untrap_traps')
+    @utils.debug_log("untrap_traps")
     @Strategy.wrap
     def untrap_traps(self):
         if self.agent.blstats.hitpoints < 10 or (self.agent.blstats.hitpoints / self.agent.blstats.max_hitpoints) < 0.5:
@@ -488,7 +544,7 @@ class ExplorationLogic:
         trap_mask = cv2.dilate(trap_mask.astype(np.uint8), kernel=np.ones((3, 3))).astype(bool)
         bfs = self.agent.bfs()
         trap_mask[self.agent.blstats.y, self.agent.blstats.x] = 0  # don't try to untrap when standing on it
-        trap_mask &= (bfs >= 0)
+        trap_mask &= bfs >= 0
         if not trap_mask.any():
             yield False
             return
@@ -509,7 +565,7 @@ class ExplorationLogic:
             if utils.adjacent((self.agent.blstats.y, self.agent.blstats.x), (trap_y, trap_x)):
                 trap_glyph = level.objects[trap_y, trap_x]
                 if trap_glyph not in untrappable_traps:
-                    raise AgentPanic('a trap is no longer there')
+                    raise AgentPanic("a trap is no longer there")
                 # assert level.objects[trap_y, trap_x] == trap_glyph
                 if trap_y == self.agent.blstats.y and trap_x == self.agent.blstats.x:
                     continue

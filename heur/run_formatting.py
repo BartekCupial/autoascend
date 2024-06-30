@@ -1,17 +1,13 @@
-import jsonlines
 import os
 import sys
 import traceback
-
+from argparse import ArgumentParser
 from multiprocessing import Pool
 from pathlib import Path
-from argparse import ArgumentParser
 
-from heur.action_textmap import (
-    nle_comp_preqs,
-    nle_obs_preqs,
-    special_tokens_interaction_history,
-)
+import jsonlines
+
+from heur.action_textmap import nle_comp_preqs, nle_obs_preqs, special_tokens_interaction_history
 from heur.instruction_encode_templates import encode_instruction_example
 
 
@@ -40,7 +36,7 @@ def faster_load_and_process_chunks(
 ):
     def process_helper_raw_observation(data):
         seq = len(data)
-            
+
         query = form_prompt(data[0], obs_preqs)
         prompts = []
         actions = []
@@ -91,7 +87,7 @@ def faster_load_and_process_chunks(
 
 def worker(args):
     from_, to_, input_dirs, output_dir = args
-    
+
     scores = []
     for i in range(from_, to_):
         input_dir = input_dirs[i]
@@ -102,7 +98,7 @@ def worker(args):
                 output_dir=output_dir,
             )
         except BaseException as e:
-            print(''.join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
+            print("".join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
 
     return scores
 
@@ -132,13 +128,16 @@ if __name__ == "__main__":
 
     with Pool(args.num_workers) as pool:
         scores = list(
-            pool.map(worker, [
-                (
-                    i * len(directories) // args.num_workers,
-                    (i + 1) * len(directories) // args.num_workers,
-                    directories,
-                    args.output_dir,
-                )
-                for i in range(args.num_workers)
-            ]
-        ))
+            pool.map(
+                worker,
+                [
+                    (
+                        i * len(directories) // args.num_workers,
+                        (i + 1) * len(directories) // args.num_workers,
+                        directories,
+                        args.output_dir,
+                    )
+                    for i in range(args.num_workers)
+                ],
+            )
+        )

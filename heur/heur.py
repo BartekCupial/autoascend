@@ -19,24 +19,23 @@ from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from pprint import pprint
 
+import agent as agent_lib
 import gym
 import nle.nethack as nh
 import numpy as np
-
-import agent as agent_lib
 import visualize
 from utils import plot_dashboard
 
 
 def fork_with_nethack_env(env):
-    tmpdir = tempfile.mkdtemp(prefix='nlecopy_')
+    tmpdir = tempfile.mkdtemp(prefix="nlecopy_")
     shutil.copytree(env.env._vardir, tmpdir, dirs_exist_ok=True)
     env.env._tempdir = None  # it has to be done before the fork to avoid removing the same directory two times
     gc.collect()
 
     pid = os.fork()
 
-    env.env._tempdir = tempfile.TemporaryDirectory(prefix='nlefork_')
+    env.env._tempdir = tempfile.TemporaryDirectory(prefix="nlefork_")
     shutil.copytree(tmpdir, env.env._tempdir.name, dirs_exist_ok=True)
     env.env._vardir = env.env._tempdir.name
     os.chdir(env.env._vardir)
@@ -48,7 +47,7 @@ def reload_agent(base_path=str(Path(__file__).parent.absolute())):
     visualize = agent_lib = None
     modules_to_remove = []
     for k, m in sys.modules.items():
-        if hasattr(m, '__file__') and m.__file__ and m.__file__.startswith(base_path):
+        if hasattr(m, "__file__") and m.__file__ and m.__file__.startswith(base_path):
             modules_to_remove.append(k)
     del m
 
@@ -62,8 +61,7 @@ def reload_agent(base_path=str(Path(__file__).parent.absolute())):
                 gc.collect()
                 break
         else:
-            assert 0, ('cannot unload agent library',
-                       {k: sys.getrefcount(sys.modules[k]) for k in modules_to_remove})
+            assert 0, ("cannot unload agent library", {k: sys.getrefcount(sys.modules[k]) for k in modules_to_remove})
 
 
 class ReloadAgent(KeyboardInterrupt):
@@ -72,15 +70,17 @@ class ReloadAgent(KeyboardInterrupt):
 
 
 class EnvWrapper:
-    def __init__(self, env, to_skip=0, visualizer_args=dict(enable=False), step_limit=None, agent_args={}, interactive=False):
+    def __init__(
+        self, env, to_skip=0, visualizer_args=dict(enable=False), step_limit=None, agent_args={}, interactive=False
+    ):
         self.env = env
         self.agent_args = agent_args
         self.interactive = interactive
         self.to_skip = to_skip
         self.step_limit = step_limit
         self.visualizer = None
-        if visualizer_args['enable']:
-            visualizer_args.pop('enable')
+        if visualizer_args["enable"]:
+            visualizer_args.pop("enable")
             self.visualizer = visualize.Visualizer(self, **visualizer_args)
         self.last_observation = None
         self.agent = None
@@ -113,17 +113,17 @@ class EnvWrapper:
         obs = self.env.reset()
         self.score = 0
         self.step_count = 0
-        self.end_reason = ''
+        self.end_reason = ""
         self.last_observation = obs
         self.is_done = False
 
         if self.agent is not None:
             self.render()
 
-        agent_lib.G.assert_map(obs['glyphs'], obs['chars'])
+        agent_lib.G.assert_map(obs["glyphs"], obs["chars"])
 
-        blstats = agent_lib.BLStats(*obs['blstats'])
-        assert obs['chars'][blstats.y, blstats.x] == ord('@')
+        blstats = agent_lib.BLStats(*obs["blstats"])
+        assert obs["chars"][blstats.y, blstats.x] == ord("@")
 
         return obs
 
@@ -133,7 +133,7 @@ class EnvWrapper:
             pid = fork_with_nethack_env(self.env)
             if pid != 0:
                 # parent
-                print('freezing parent')
+                print("freezing parent")
                 while 1:
                     try:
                         os.waitpid(pid, 0)
@@ -144,11 +144,11 @@ class EnvWrapper:
                 self.visualizer.render()
                 while 1:
                     try:
-                        fork_again = input('fork again [yn]: ')
-                        if fork_again == 'y':
+                        fork_again = input("fork again [yn]: ")
+                        if fork_again == "y":
                             fork_again = True
                             break
-                        elif fork_again == 'n':
+                        elif fork_again == "n":
                             fork_again = False
                             break
                     except KeyboardInterrupt:
@@ -165,18 +165,22 @@ class EnvWrapper:
 
     def render(self, force=False):
         if self.visualizer is not None:
-            with self.debug_tiles(self.agent.current_level().walkable, color=(0, 255, 0, 128)) \
-                    if self.draw_walkable else contextlib.suppress():
-                with self.debug_tiles(~self.agent.current_level().seen, color=(255, 0, 0, 128)) \
-                        if self.draw_seen else contextlib.suppress():
-                    with self.debug_tiles(self.agent.current_level().shop, color=(0, 0, 255, 64)) \
-                            if self.draw_shop else contextlib.suppress():
-                        with self.debug_tiles(self.agent.current_level().shop_interior, color=(0, 0, 255, 64)) \
-                                if self.draw_shop else contextlib.suppress():
-                            with self.debug_tiles((self.last_observation['specials'] & nh.MG_OBJPILE) > 0,
-                                                color=(0, 255, 255, 128)):
-                                with self.debug_tiles([self.agent.cursor_pos],
-                                                      color=(255, 255, 255, 128)):
+            with self.debug_tiles(
+                self.agent.current_level().walkable, color=(0, 255, 0, 128)
+            ) if self.draw_walkable else contextlib.suppress():
+                with self.debug_tiles(
+                    ~self.agent.current_level().seen, color=(255, 0, 0, 128)
+                ) if self.draw_seen else contextlib.suppress():
+                    with self.debug_tiles(
+                        self.agent.current_level().shop, color=(0, 0, 255, 64)
+                    ) if self.draw_shop else contextlib.suppress():
+                        with self.debug_tiles(
+                            self.agent.current_level().shop_interior, color=(0, 0, 255, 64)
+                        ) if self.draw_shop else contextlib.suppress():
+                            with self.debug_tiles(
+                                (self.last_observation["specials"] & nh.MG_OBJPILE) > 0, color=(0, 255, 255, 128)
+                            ):
+                                with self.debug_tiles([self.agent.cursor_pos], color=(255, 255, 255, 128)):
                                     if force:
                                         self.visualizer.force_next_frame()
                                     rendered = self.visualizer.render()
@@ -185,36 +189,36 @@ class EnvWrapper:
                 return
 
             if self.agent is not None:
-                print('Message:', self.agent.message)
-                print('Pop-up :', self.agent.popup)
+                print("Message:", self.agent.message)
+                print("Pop-up :", self.agent.popup)
             print()
-            if self.agent is not None and hasattr(self.agent, 'blstats'):
-                print(agent_lib.BLStats(*self.last_observation['blstats']))
-                print(f'Carrying: {self.agent.inventory.items.total_weight} / {self.agent.character.carrying_capacity}')
-                print('Character:', self.agent.character)
-            print('Misc :', self.last_observation['misc'])
-            print('Score:', self.score)
-            print('Steps:', self.env._steps)
-            print('Turns:', self.env._turns)
-            print('Seed :', self.env.get_seeds())
-            print('Items below me :', self.agent.inventory.items_below_me)
-            print('Engraving below me:', self.agent.inventory.engraving_below_me)
+            if self.agent is not None and hasattr(self.agent, "blstats"):
+                print(agent_lib.BLStats(*self.last_observation["blstats"]))
+                print(f"Carrying: {self.agent.inventory.items.total_weight} / {self.agent.character.carrying_capacity}")
+                print("Character:", self.agent.character)
+            print("Misc :", self.last_observation["misc"])
+            print("Score:", self.score)
+            print("Steps:", self.env._steps)
+            print("Turns:", self.env._turns)
+            print("Seed :", self.env.get_seeds())
+            print("Items below me :", self.agent.inventory.items_below_me)
+            print("Engraving below me:", self.agent.inventory.engraving_below_me)
             print()
             print(self.agent.inventory.items)
-            print('-' * 20)
+            print("-" * 20)
 
             self.env.render()
-            print('-' * 20)
+            print("-" * 20)
             print()
 
     def print_help(self):
         scene_glyphs = set(self.env.last_observation[0].reshape(-1))
-        obj_classes = {getattr(nh, x): x for x in dir(nh) if x.endswith('_CLASS')}
-        glyph_classes = sorted((getattr(nh, x), x) for x in dir(nh) if x.endswith('_OFF'))
+        obj_classes = {getattr(nh, x): x for x in dir(nh) if x.endswith("_CLASS")}
+        glyph_classes = sorted((getattr(nh, x), x) for x in dir(nh) if x.endswith("_OFF"))
 
         texts = []
         for i in range(nh.MAX_GLYPH):
-            desc = ''
+            desc = ""
             if glyph_classes and i == glyph_classes[0][0]:
                 cls = glyph_classes.pop(0)[1]
 
@@ -227,20 +231,25 @@ class EnvWrapper:
                 oclass = ord(obj.oc_class)
                 desc = f': {obj_classes[oclass]}: "{appearance}"'
 
-            desc2 = 'Labels: '
+            desc2 = "Labels: "
             if i in agent_lib.G.INV_DICT:
-                desc2 += ','.join(agent_lib.G.INV_DICT[i])
+                desc2 += ",".join(agent_lib.G.INV_DICT[i])
 
             if i in scene_glyphs:
                 pos = (self.env.last_observation[0].reshape(-1) == i).nonzero()[0]
                 count = len(pos)
                 pos = pos[0]
                 char = bytes([self.env.last_observation[1].reshape(-1)[pos]])
-                texts.append((-count, f'{" " if i in agent_lib.G.INV_DICT else "U"} Glyph {i:4d} -> '
-                                      f'Char: {char} Count: {count:4d} '
-                                      f'Type: {cls.replace("_OFF", ""):11s} {desc:30s} '
-                                      f'{agent_lib.ALL.find(i) if agent_lib.ALL.find(i) is not None else "":20} '
-                                      f'{desc2}'))
+                texts.append(
+                    (
+                        -count,
+                        f'{" " if i in agent_lib.G.INV_DICT else "U"} Glyph {i:4d} -> '
+                        f"Char: {char} Count: {count:4d} "
+                        f'Type: {cls.replace("_OFF", ""):11s} {desc:30s} '
+                        f'{agent_lib.ALL.find(i) if agent_lib.ALL.find(i) is not None else "":20} '
+                        f"{desc2}",
+                    )
+                )
         for _, t in sorted(texts):
             print(t)
 
@@ -248,36 +257,36 @@ class EnvWrapper:
         while 1:
             key = os.read(sys.stdin.fileno(), 5)
 
-            if key == b'\x1bOP':  # F1
+            if key == b"\x1bOP":  # F1
                 self.draw_walkable = not self.draw_walkable
                 self.visualizer.force_next_frame()
                 self.render()
                 continue
-            elif key == b'\x1bOQ':  # F2
+            elif key == b"\x1bOQ":  # F2
                 self.draw_seen = not self.draw_seen
                 self.visualizer.force_next_frame()
                 self.render()
                 continue
 
-            elif key == b'\x1bOR':  # F3
+            elif key == b"\x1bOR":  # F3
                 self.draw_shop = not self.draw_shop
                 self.visualizer.force_next_frame()
                 self.render()
                 continue
 
-            if key == b'\x1bOS':  # F4
+            if key == b"\x1bOS":  # F4
                 raise ReloadAgent()
 
-            if key == b'\x1b[15~':  # F5
+            if key == b"\x1b[15~":  # F5
                 self.fork()
                 continue
 
-            elif key == b'\x1b[3~':  # Delete
+            elif key == b"\x1b[3~":  # Delete
                 self.to_skip = 16
                 return None
 
             if len(key) != 1:
-                print('wrong key', key)
+                print("wrong key", key)
                 continue
             key = key[0]
             if key == 10:
@@ -293,7 +302,7 @@ class EnvWrapper:
                 actions = [a for a in self.env._actions if int(a) == key]
                 assert len(actions) < 2
                 if len(actions) == 0:
-                    print('wrong key', key)
+                    print("wrong key", key)
                     continue
 
                 action = actions[0]
@@ -309,7 +318,7 @@ class EnvWrapper:
 
             if self.interactive:
                 print()
-                print('agent_action:', agent_action, repr(chr(int(agent_action))))
+                print("agent_action:", agent_action, repr(chr(int(agent_action))))
                 print()
 
             if self.to_skip > 0:
@@ -322,7 +331,7 @@ class EnvWrapper:
                 action = agent_action
 
             if self.interactive:
-                print('action:', action)
+                print("action:", action)
                 print()
         else:
             action = agent_action
@@ -341,19 +350,25 @@ class EnvWrapper:
             if self.visualizer is not None:
                 self.visualizer.step(self.last_observation, repr(chr(int(agent_action))))
 
-            end_reason = bytes(obs['tty_chars'].reshape(-1)).decode().replace('You made the top ten list!', '').split()
-            if end_reason[7].startswith('Agent'):
+            end_reason = bytes(obs["tty_chars"].reshape(-1)).decode().replace("You made the top ten list!", "").split()
+            if end_reason[7].startswith("Agent"):
                 self.score = int(end_reason[6])
-                end_reason = ' '.join(end_reason[8:-2])
+                end_reason = " ".join(end_reason[8:-2])
             else:
                 assert self.score == 0, end_reason
-                end_reason = ' '.join(end_reason[7:-2])
-            first_sentence = end_reason.split('.')[0].split()
-            self.end_reason = info['end_status'].name + ': ' + \
-                              (' '.join(first_sentence[:first_sentence.index('in')]) + '. ' + \
-                               '.'.join(end_reason.split('.')[1:]).strip()).strip()
+                end_reason = " ".join(end_reason[7:-2])
+            first_sentence = end_reason.split(".")[0].split()
+            self.end_reason = (
+                info["end_status"].name
+                + ": "
+                + (
+                    " ".join(first_sentence[: first_sentence.index("in")])
+                    + ". "
+                    + ".".join(end_reason.split(".")[1:]).strip()
+                ).strip()
+            )
         if self.step_limit is not None and self.step_count == self.step_limit + 1:
-            self.end_reason = self.end_reason or 'steplimit'
+            self.end_reason = self.end_reason or "steplimit"
             done = True
         elif self.step_limit is not None and self.step_count > self.step_limit + 1:
             assert 0
@@ -365,7 +380,7 @@ class EnvWrapper:
             if self.visualizer is not None:
                 self.render()
             if self.interactive:
-                print('Summary:')
+                print("Summary:")
                 pprint(self.get_summary())
 
         return obs, reward, done, info
@@ -382,16 +397,16 @@ class EnvWrapper:
 
     def get_summary(self):
         return {
-            'score': self.score,
-            'steps': self.env._steps,
-            'turns': self.agent.blstats.time,
-            'level_num': len(self.agent.levels),
-            'experience_level': self.agent.blstats.experience_level,
-            'milestone': self.agent.global_logic.milestone,
-            'panic_num': len(self.agent.all_panics),
-            'character': str(self.agent.character).split()[0],
-            'end_reason': self.end_reason,
-            'seed': self.env.get_seeds(),
+            "score": self.score,
+            "steps": self.env._steps,
+            "turns": self.agent.blstats.time,
+            "level_num": len(self.agent.levels),
+            "experience_level": self.agent.blstats.experience_level,
+            "milestone": self.agent.global_logic.milestone,
+            "panic_num": len(self.agent.all_panics),
+            "character": str(self.agent.character).split()[0],
+            "end_reason": self.end_reason,
+            "seed": self.env.get_seeds(),
             **self.agent.stats_logger.get_stats_dict(),
         }
 
@@ -401,29 +416,33 @@ def prepare_env(args, seed, step_limit=None):
 
     if args.role:
         while 1:
-            env = gym.make('NetHackChallenge-v0')
+            env = gym.make("NetHackChallenge-v0")
             env.seed(seed, seed)
             obs = env.reset()
-            blstats = agent_lib.BLStats(*obs['blstats'])
-            character_glyph = obs['glyphs'][blstats.y, blstats.x]
+            blstats = agent_lib.BLStats(*obs["blstats"])
+            character_glyph = obs["glyphs"][blstats.y, blstats.x]
             if any([nh.permonst(nh.glyph_to_mon(character_glyph)).mname.startswith(role) for role in args.role]):
                 break
-            seed += 10 ** 9
+            seed += 10**9
             env.close()
 
     if args.visualize_ends is not None:
-        assert args.mode == 'simulate'
-        args.skip_to = 2 ** 32
-    visualizer_args = dict(enable=args.mode == 'run' or args.visualize_ends is not None,
-                           start_visualize=args.visualize_ends[seed] if args.visualize_ends is not None else None,
-                           show=args.mode == 'run',
-                           output_dir=Path('/tmp/vis/') / str(seed),
-                           frame_skipping=None if args.visualize_ends is None else 1)
-    env = EnvWrapper(gym.make('NetHackChallenge-v0', no_progress_timeout=1000),
-                     to_skip=args.skip_to, visualizer_args=visualizer_args,
-                     agent_args=dict(panic_on_errors=args.panic_on_errors,
-                                     verbose=args.mode == 'run'),
-                     interactive=args.mode == 'run')
+        assert args.mode == "simulate"
+        args.skip_to = 2**32
+    visualizer_args = dict(
+        enable=args.mode == "run" or args.visualize_ends is not None,
+        start_visualize=args.visualize_ends[seed] if args.visualize_ends is not None else None,
+        show=args.mode == "run",
+        output_dir=Path("/tmp/vis/") / str(seed),
+        frame_skipping=None if args.visualize_ends is None else 1,
+    )
+    env = EnvWrapper(
+        gym.make("NetHackChallenge-v0", no_progress_timeout=1000),
+        to_skip=args.skip_to,
+        visualizer_args=visualizer_args,
+        agent_args=dict(panic_on_errors=args.panic_on_errors, verbose=args.mode == "run"),
+        interactive=args.mode == "run",
+    )
     env.env.seed(seed, seed)
     return env
 
@@ -439,14 +458,14 @@ def single_simulation(args, seed_offset, timeout=720):
         else:
             env.main()
     except multiprocessing.context.TimeoutError:
-        env.end_reason = f'timeout'
+        env.end_reason = f"timeout"
     except BaseException as e:
         env.end_reason = f'exception: {"".join(traceback.format_exception(None, e, e.__traceback__))}'
-        print(f'Seed {env.env.get_seeds()}, step {env.step_count}:', env.end_reason)
+        print(f"Seed {env.env.get_seeds()}, step {env.step_count}:", env.end_reason)
 
     end_time = time.time()
     summary = env.get_summary()
-    summary['duration'] = end_time - start_time
+    summary["duration"] = end_time - start_time
 
     if args.visualize_ends is not None:
         env.visualizer.save_end_history()
@@ -463,33 +482,34 @@ def run_single_interactive_game(args):
         summary = single_simulation(args, 0, timeout=None)
         pprint(summary)
     finally:
-        os.system('stty sane')
+        os.system("stty sane")
 
 
 def run_profiling(args):
-    if args.profiler == 'cProfile':
-        import cProfile, pstats
-    elif args.profiler == 'pyinstrument':
+    if args.profiler == "cProfile":
+        import cProfile
+        import pstats
+    elif args.profiler == "pyinstrument":
         from pyinstrument import Profiler
-    elif args.profiler == 'none':
+    elif args.profiler == "none":
         pass
     else:
         assert 0
 
-    if args.profiler == 'cProfile':
+    if args.profiler == "cProfile":
         pr = cProfile.Profile()
-    elif args.profiler == 'pyinstrument':
+    elif args.profiler == "pyinstrument":
         profiler = Profiler()
-    elif args.profiler == 'none':
+    elif args.profiler == "none":
         pass
     else:
         assert 0
 
-    if args.profiler == 'cProfile':
+    if args.profiler == "cProfile":
         pr.enable()
-    elif args.profiler == 'pyinstrument':
+    elif args.profiler == "pyinstrument":
         profiler.start()
-    elif args.profiler == 'none':
+    elif args.profiler == "none":
         pass
     else:
         assert 0
@@ -497,54 +517,53 @@ def run_profiling(args):
     start_time = time.time()
     res = []
     for i in range(args.episodes):
-        print(f'starting {i + 1} game...')
+        print(f"starting {i + 1} game...")
         res.append(single_simulation(args, i, timeout=None))
     duration = time.time() - start_time
 
-
-    if args.profiler == 'cProfile':
+    if args.profiler == "cProfile":
         pr.disable()
-    elif args.profiler == 'pyinstrument':
+    elif args.profiler == "pyinstrument":
         session = profiler.stop()
-    elif args.profiler == 'none':
+    elif args.profiler == "none":
         pass
     else:
         assert 0
 
     print()
-    print('turns_per_second :', sum([r['turns'] for r in res]) / duration)
-    print('steps_per_second :', sum([r['steps'] for r in res]) / duration)
-    print('episodes_per_hour:', len(res) / duration * 3600)
+    print("turns_per_second :", sum([r["turns"] for r in res]) / duration)
+    print("steps_per_second :", sum([r["steps"] for r in res]) / duration)
+    print("episodes_per_hour:", len(res) / duration * 3600)
     print()
 
-    if args.profiler == 'cProfile':
+    if args.profiler == "cProfile":
         stats = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE)
         stats.print_stats(30)
         stats = pstats.Stats(pr).sort_stats(pstats.SortKey.TIME)
         stats.print_stats(30)
-        stats.dump_stats('/tmp/nethack_stats.profile')
+        stats.dump_stats("/tmp/nethack_stats.profile")
 
-        subprocess.run('gprof2dot -f pstats /tmp/nethack_stats.profile -o /tmp/calling_graph.dot'.split())
-        subprocess.run('xdot /tmp/calling_graph.dot'.split())
-    elif args.profiler == 'pyinstrument':
+        subprocess.run("gprof2dot -f pstats /tmp/nethack_stats.profile -o /tmp/calling_graph.dot".split())
+        subprocess.run("xdot /tmp/calling_graph.dot".split())
+    elif args.profiler == "pyinstrument":
         frame_records = session.frame_records
 
         new_records = []
         for record in frame_records:
             ret_frames = []
             for frame in record[0][1:][::-1]:
-                func, module, line = frame.split('\0')
-                if func in ['f', 'f2', 'run', 'wrapper']:
+                func, module, line = frame.split("\0")
+                if func in ["f", "f2", "run", "wrapper"]:
                     continue
                 ret_frames.append(frame)
-                if module.endswith('agent.py') and func in ['step', 'preempt', 'call_update_functions']:
+                if module.endswith("agent.py") and func in ["step", "preempt", "call_update_functions"]:
                     break
             ret_frames.append(record[0][0])
             new_records.append((ret_frames[::-1], record[1] / session.duration * 100))
         session.frame_records = new_records
         session.start_call_stack = [session.start_call_stack[0]]
 
-        print('Cumulative time:')
+        print("Cumulative time:")
         profiler._last_session = session
         print(profiler.output_text(unicode=True, color=True))
 
@@ -552,7 +571,7 @@ def run_profiling(args):
         for record in frame_records:
             ret_frames = []
             for frame in record[0][1:][::-1]:
-                func, module, line = frame.split('\0')
+                func, module, line = frame.split("\0")
                 ret_frames.append(frame)
                 if str(Path(module).absolute()).startswith(str(Path(__file__).parent.absolute())):
                     break
@@ -561,10 +580,10 @@ def run_profiling(args):
         session.frame_records = new_records
         session.start_call_stack = [session.start_call_stack[0]]
 
-        print('Total time:')
+        print("Total time:")
         profiler._last_session = session
         print(profiler.output_text(unicode=True, color=True, show_all=True))
-    elif args.profiler == 'none':
+    elif args.profiler == "none":
         pass
     else:
         assert 0
@@ -572,16 +591,17 @@ def run_profiling(args):
 
 def run_simulations(args):
     import ray
-    ray.init(address='auto')
+
+    ray.init(address="auto")
 
     start_time = time.time()
     plot_queue = Queue()
 
     def plot_thread_func():
-        from matplotlib import pyplot as plt
         import seaborn as sns
+        from matplotlib import pyplot as plt
 
-        warnings.filterwarnings('ignore')
+        warnings.filterwarnings("ignore")
         sns.set()
 
         fig = plt.figure()
@@ -612,6 +632,7 @@ def run_simulations(args):
         # I think there is some nondeterminism in nle environment when playing
         # multiple episodes (maybe bones?). That should do the trick
         q = Queue()
+
         def sim():
             q.put(single_simulation(args, seed_offset, timeout=timeout))
 
@@ -636,33 +657,33 @@ def run_simulations(args):
         # assert not q.empty()
 
     try:
-        with Path('/workspace/nh_sim.json').open('r') as f:
+        with Path("/workspace/nh_sim.json").open("r") as f:
             all_res = json.load(f)
-        print('Continue running: ', (len(all_res['seed'])))
+        print("Continue running: ", (len(all_res["seed"])))
     except FileNotFoundError:
         all_res = {}
 
     done_seeds = set()
-    if 'seed' in all_res:
-        done_seeds = set(s[0] for s in all_res['seed'])
+    if "seed" in all_res:
+        done_seeds = set(s[0] for s in all_res["seed"])
 
     # remove runs finished with exceptions if rerunning with --panic-on-errors
     if args.panic_on_errors:
         idx_to_repeat = set()
-        for i, (seed, reason) in enumerate(zip(all_res['seed'], all_res['end_reason'])):
-            if reason.startswith('exception'):
+        for i, (seed, reason) in enumerate(zip(all_res["seed"], all_res["end_reason"])):
+            if reason.startswith("exception"):
                 idx_to_repeat.add(i)
                 done_seeds.remove(seed[0])
-        print('Repeating idx:', idx_to_repeat)
+        print("Repeating idx:", idx_to_repeat)
         for k, v in all_res.items():
             all_res[k] = [v for i, v in enumerate(v) if i not in idx_to_repeat]
 
-    print('skipping seeds', done_seeds)
+    print("skipping seeds", done_seeds)
     for seed_offset in range(args.episodes):
         seed = args.seed + seed_offset
         if seed in done_seeds:
             continue
-        if args.visualize_ends is None or seed_offset in [k % 10 ** 9 for k in args.visualize_ends]:
+        if args.visualize_ends is None or seed_offset in [k % 10**9 for k in args.visualize_ends]:
             refs.append(remote_simulation.remote(args, seed_offset))
 
     count = len(done_seeds)
@@ -677,88 +698,105 @@ def run_simulations(args):
 
         count += 1
         for k, v in single_res.items():
-            all_res[k].append(v if not hasattr(v, 'item') else v.item())
+            all_res[k].append(v if not hasattr(v, "item") else v.item())
 
         plot_queue.put(all_res)
 
         total_duration = time.time() - start_time
 
-        median_score_std = np.std([np.median(np.random.choice(all_res["score"],
-                                                              size=max(1, len(all_res["score"]) // 2)))
-                                   for _ in range(1024)])
+        median_score_std = np.std(
+            [
+                np.median(np.random.choice(all_res["score"], size=max(1, len(all_res["score"]) // 2)))
+                for _ in range(1024)
+            ]
+        )
 
         text = []
-        text.append(f'count                         : {count}')
+        text.append(f"count                         : {count}")
         text.append(f'time_per_simulation           : {np.mean(all_res["duration"])}')
         text.append(f'simulations_per_hour          : {3600 / np.mean(all_res["duration"])}')
-        text.append(f'simulations_per_hour(multi)   : {3600 * (count - initial_count) / total_duration}')
+        text.append(f"simulations_per_hour(multi)   : {3600 * (count - initial_count) / total_duration}")
         text.append(f'time_per_turn                 : {np.sum(all_res["duration"]) / np.sum(all_res["turns"])}')
         text.append(f'turns_per_second              : {np.sum(all_res["turns"]) / np.sum(all_res["duration"])}')
         text.append(f'turns_per_second(multi)       : {np.sum(all_res["turns"]) / total_duration}')
         text.append(f'panic_num_per_game(median)    : {np.median(all_res["panic_num"])}')
         text.append(f'panic_num_per_game(mean)      : {np.sum(all_res["panic_num"]) / count}')
-        text.append(f'score_median                  : {np.median(all_res["score"]):.1f} +/- '
-                    f'{median_score_std:.1f}')
-        text.append(f'score_mean                    : {np.mean(all_res["score"]):.1f} +/- '
-                    f'{np.std(all_res["score"]) / (len(all_res["score"]) ** 0.5):.1f}')
-        text.append(f'score_05-95                   : {np.quantile(all_res["score"], 0.05)} '
-                    f'{np.quantile(all_res["score"], 0.95)}')
-        text.append(f'score_25-75                   : {np.quantile(all_res["score"], 0.25)} '
-                    f'{np.quantile(all_res["score"], 0.75)}')
-        text.append(f'exceptions                    : '
-                    f'{sum([r.startswith("exception:") for r in all_res["end_reason"]])}')
-        text.append(f'steplimit                     : '
-                    f'{sum([r.startswith("steplimit") or r.startswith("ABORT") for r in all_res["end_reason"]])}')
-        text.append(f'timeout                       : '
-                    f'{sum([r.startswith("timeout") for r in all_res["end_reason"]])}')
-        print('\n'.join(text) + '\n')
+        text.append(f'score_median                  : {np.median(all_res["score"]):.1f} +/- ' f"{median_score_std:.1f}")
+        text.append(
+            f'score_mean                    : {np.mean(all_res["score"]):.1f} +/- '
+            f'{np.std(all_res["score"]) / (len(all_res["score"]) ** 0.5):.1f}'
+        )
+        text.append(
+            f'score_05-95                   : {np.quantile(all_res["score"], 0.05)} '
+            f'{np.quantile(all_res["score"], 0.95)}'
+        )
+        text.append(
+            f'score_25-75                   : {np.quantile(all_res["score"], 0.25)} '
+            f'{np.quantile(all_res["score"], 0.75)}'
+        )
+        text.append(
+            f"exceptions                    : " f'{sum([r.startswith("exception:") for r in all_res["end_reason"]])}'
+        )
+        text.append(
+            f"steplimit                     : "
+            f'{sum([r.startswith("steplimit") or r.startswith("ABORT") for r in all_res["end_reason"]])}'
+        )
+        text.append(
+            f"timeout                       : " f'{sum([r.startswith("timeout") for r in all_res["end_reason"]])}'
+        )
+        print("\n".join(text) + "\n")
 
         if args.visualize_ends is None:
-            with Path('/workspace/nh_sim.json').open('w') as f:
+            with Path("/workspace/nh_sim.json").open("w") as f:
                 json.dump(all_res, f)
 
-    print('DONE!')
+    print("DONE!")
     ray.shutdown()
 
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('mode', choices=('simulate', 'run', 'profile'))
-    parser.add_argument('--seed', type=int)
-    parser.add_argument('--skip-to', type=int, default=0)
-    parser.add_argument('-n', '--episodes', type=int, default=1)
-    parser.add_argument('--role', choices=('arc', 'bar', 'cav', 'hea', 'kni',
-                                           'mon', 'pri', 'ran', 'rog', 'sam',
-                                           'tou', 'val', 'wiz'),
-                        action='append')
-    parser.add_argument('--panic-on-errors', action='store_true')
-    parser.add_argument('--no-plot', action='store_true')
-    parser.add_argument('--visualize-ends', type=Path, default=None,
-                        help='Path to json file with dict: seed -> visualization_start_step')
-    parser.add_argument('--profiler', choices=('cProfile', 'pyinstrument', 'none'), default='pyinstrument')
-    parser.add_argument('--with-gpu', action='store_true')
+    parser.add_argument("mode", choices=("simulate", "run", "profile"))
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--skip-to", type=int, default=0)
+    parser.add_argument("-n", "--episodes", type=int, default=1)
+    parser.add_argument(
+        "--role",
+        choices=("arc", "bar", "cav", "hea", "kni", "mon", "pri", "ran", "rog", "sam", "tou", "val", "wiz"),
+        action="append",
+    )
+    parser.add_argument("--panic-on-errors", action="store_true")
+    parser.add_argument("--no-plot", action="store_true")
+    parser.add_argument(
+        "--visualize-ends",
+        type=Path,
+        default=None,
+        help="Path to json file with dict: seed -> visualization_start_step",
+    )
+    parser.add_argument("--profiler", choices=("cProfile", "pyinstrument", "none"), default="pyinstrument")
+    parser.add_argument("--with-gpu", action="store_true")
 
     args = parser.parse_args()
     if args.seed is None:
-        args.seed = np.random.randint(0, 2 ** 30)
+        args.seed = np.random.randint(0, 2**30)
 
     if args.visualize_ends is not None:
-        with args.visualize_ends.open('r') as f:
+        with args.visualize_ends.open("r") as f:
             args.visualize_ends = {int(k): int(v) for k, v in json.load(f).items()}
 
-    print('ARGS:', args)
+    print("ARGS:", args)
     return args
 
 
 def main():
     args = parse_args()
-    if args.mode == 'simulate':
+    if args.mode == "simulate":
         run_simulations(args)
-    elif args.mode == 'profile':
+    elif args.mode == "profile":
         run_profiling(args)
-    elif args.mode == 'run':
+    elif args.mode == "run":
         run_single_interactive_game(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

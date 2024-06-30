@@ -69,9 +69,7 @@ encoding_templates_wo_input = [
 ]
 
 
-def encode_instruction_example(
-    instruction, input, output, random_template=True, eos_token=None
-):
+def encode_instruction_example(instruction, input, output, random_template=True, eos_token=None):
     if random_template:
         if input is not None and input.strip() != "":
             # randomly choose a template with input
@@ -79,9 +77,7 @@ def encode_instruction_example(
                 encoding_templates_w_input,
                 weights=[w for _, _, w in encoding_templates_w_input],
             )[0]
-            prompt = prompt_template.format(
-                instruction=instruction.strip(), input=input.strip()
-            )
+            prompt = prompt_template.format(instruction=instruction.strip(), input=input.strip())
             completion = completion_template.format(output=output.strip())
         else:
             # randomly choose a template without input
@@ -106,9 +102,7 @@ def encode_instruction_example(
     return data
 
 
-def encode_cot_instruction_example(
-    instruction, input, cot_inputs, cot_outputs, output, eos_token="[END]"
-):
+def encode_cot_instruction_example(instruction, input, cot_inputs, cot_outputs, output, eos_token="[END]"):
     if input is not None and input.strip() != "":
         prompt = instruction.strip() + "\n\n" + input.strip() + "\n\n"
         completion = output.strip()

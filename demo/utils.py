@@ -12,7 +12,7 @@ def save_as_pickled_object(obj, filepath):
     n_bytes = sys.getsizeof(bytes_out)
     with open(filepath, "wb") as f_out:
         for idx in range(0, n_bytes, max_bytes):
-            f_out.write(bytes_out[idx: idx + max_bytes])
+            f_out.write(bytes_out[idx : idx + max_bytes])
 
 
 def load_as_pickled_object(filepath):

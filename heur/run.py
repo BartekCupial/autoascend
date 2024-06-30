@@ -4,11 +4,12 @@ import sys
 import threading
 import time
 import traceback
-
-import numpy as np
 from multiprocessing import Pool
-from nle import nethack as nh
+
 import gym
+import numpy as np
+from nle import nethack as nh
+
 from heur.agent import Agent
 from heur.character import Character
 
@@ -16,6 +17,7 @@ from heur.character import Character
 class AgentStepTimeout(KeyboardInterrupt):
     # it inheirits from KeyboardInterrupt because agent never catches it
     pass
+
 
 class EnvWrapper:
     def __init__(self, env):
@@ -36,7 +38,7 @@ class EnvWrapper:
         obs, reward, done, info = self.env.step(nh.actions.ACTIONS.index(action))
         self.score += reward
         self.step_count += 1
-        #if self.score >= 5650:
+        # if self.score >= 5650:
         #    if self.agent.character.role not in []:#self.agent.character.VALKYRIE]:
         #        for _ in range(5):
         #            action = nh.actions.ACTIONS.index(nh.actions.Command.ESC)
@@ -65,9 +67,10 @@ class EnvWrapper:
                     if thread is threading.main_thread():
                         break
                 else:
-                    assert 0, 'main thread not found'
-                out = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id),
-                                                                 ctypes.py_object(AgentStepTimeout))
+                    assert 0, "main thread not found"
+                out = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(thread_id), ctypes.py_object(AgentStepTimeout)
+                )
                 assert out == 1, out
                 break
 
@@ -85,7 +88,7 @@ class EnvWrapper:
 
 def worker(args):
     from_, to_, savedir = args
-    orig_env = gym.make('NetHackChallenge-v0', save_ttyrec_every=1, savedir=savedir)
+    orig_env = gym.make("NetHackChallenge-v0", save_ttyrec_every=1, savedir=savedir)
 
     scores = []
     for i in range(from_, to_):
@@ -93,13 +96,14 @@ def worker(args):
         try:
             env.main()
         except BaseException as e:
-            print(''.join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
+            print("".join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
 
-        print(f'Run {i} finished with score {env.score}', file=sys.stderr)
+        print(f"Run {i} finished with score {env.score}", file=sys.stderr)
 
         scores.append(env.score)
     orig_env.close()
     return scores
+
 
 if __name__ == "__main__":
     NUM_ASSESSMENTS = int(sys.argv[1])
@@ -109,19 +113,18 @@ if __name__ == "__main__":
 
     with Pool(NUM_THREADS) as pool:
         scores = list(
-            pool.map(worker, [
-                (
-                    i * NUM_ASSESSMENTS // NUM_THREADS,
-                    (i + 1) * NUM_ASSESSMENTS // NUM_THREADS,
-                    sys.argv[3]
-                )
-                for i in range(NUM_THREADS)
-            ]
-        ))
+            pool.map(
+                worker,
+                [
+                    (i * NUM_ASSESSMENTS // NUM_THREADS, (i + 1) * NUM_ASSESSMENTS // NUM_THREADS, sys.argv[3])
+                    for i in range(NUM_THREADS)
+                ],
+            )
+        )
     scores = [s for ss in scores for s in ss]
 
-    print('scores  :', scores, file=sys.stderr)
-    print('duration:', time.time() - start_time, file=sys.stderr)
-    print('len     :', len(scores), file=sys.stderr)
-    print('median  :', np.median(scores), file=sys.stderr)
-    print('mean    :', np.mean(scores), file=sys.stderr)
+    print("scores  :", scores, file=sys.stderr)
+    print("duration:", time.time() - start_time, file=sys.stderr)
+    print("len     :", len(scores), file=sys.stderr)
+    print("median  :", np.median(scores), file=sys.stderr)
+    print("mean    :", np.mean(scores), file=sys.stderr)

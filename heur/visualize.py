@@ -1,9 +1,9 @@
 import multiprocessing
-import nle.nethack as nh
 import queue
 import time
 
 import cv2
+import nle.nethack as nh
 import numpy as np
 
 # avoid importing agent modules here, because it makes agent reloading less reliable
@@ -24,8 +24,7 @@ def _put_text(img, text, pos, scale=FONT_SIZE / 35, thickness=1, color=(255, 255
         font = cv2.FONT_HERSHEY_SIMPLEX
     else:
         font = cv2.FONT_HERSHEY_SIMPLEX
-    return cv2.putText(img, text, pos, font,
-                       scale, color, thickness, cv2.LINE_AA)
+    return cv2.putText(img, text, pos, font, scale, color, thickness, cv2.LINE_AA)
 
 
 def _draw_frame(img, color=(90, 90, 90), thickness=3):
@@ -41,17 +40,17 @@ def _draw_grid(imgs, ncol):
     return img
 
 
-class DrawTilesScope():
-
-    def __init__(self, visualizer, tiles, color, is_path=False, is_heatmap=False, mode='fill'):
+class DrawTilesScope:
+    def __init__(self, visualizer, tiles, color, is_path=False, is_heatmap=False, mode="fill"):
         from glyph import C
+
         self.visualizer = visualizer
         self.is_heatmap = is_heatmap
         self.color = color
         self.mode = mode
         if self.is_heatmap:
             assert not is_path
-            assert self.mode == 'fill'
+            assert self.mode == "fill"
             assert isinstance(self.color, str)
             self.tiles = tiles
         else:
@@ -71,17 +70,17 @@ class DrawTilesScope():
                         y1 = y * self.visualizer.tile_size
                         x1 = x * self.visualizer.tile_size
                         if np.isnan(self.tiles[y, x]):
-                            mask[y1:y1 + self.visualizer.tile_size,
-                                 x1:x1 + self.visualizer.tile_size] = False
+                            mask[y1 : y1 + self.visualizer.tile_size, x1 : x1 + self.visualizer.tile_size] = False
                         else:
-                            grayscale[y1:y1 + self.visualizer.tile_size,
-                                      x1:x1 + self.visualizer.tile_size] = self.tiles[y, x]
+                            grayscale[
+                                y1 : y1 + self.visualizer.tile_size, x1 : x1 + self.visualizer.tile_size
+                            ] = self.tiles[y, x]
                 grayscale[mask] -= np.min(grayscale[mask])
                 grayscale[mask] /= np.max(grayscale[mask])
                 grayscale = (grayscale * 255).astype(np.uint8)
                 grayscale = cv2.blur(grayscale, (15, 15))
                 # https://docs.opencv.org/4.5.2/d3/d50/group__imgproc__colormap.html
-                heatmap = cv2.applyColorMap(grayscale, cv2.__dict__[f'COLORMAP_{self.color.upper()}'])[..., ::-1]
+                heatmap = cv2.applyColorMap(grayscale, cv2.__dict__[f"COLORMAP_{self.color.upper()}"])[..., ::-1]
                 return (rendered * 0.5 + heatmap * 0.5).astype(np.uint8) * mask + (rendered * ~mask)
 
         color = self.color
@@ -102,14 +101,15 @@ class DrawTilesScope():
             for p in self.tiles:
                 p1 = [round(i * self.visualizer.tile_size) for i in p][::-1]
                 p2 = [round((i + 1) * self.visualizer.tile_size) for i in p][::-1]
-                if self.mode == 'fill':
+                if self.mode == "fill":
                     cv2.rectangle(rendered, p1, p2, color, -1)
-                if self.mode == 'frame':
+                if self.mode == "frame":
                     cv2.rectangle(rendered, p1, p2, color, 3)
 
         if alpha != 1:
             rendered = np.clip(orig_rendered.astype(np.int16) + (rendered * alpha).astype(np.int16), 0, 255).astype(
-                np.uint8)
+                np.uint8
+            )
 
         return rendered.copy()
 
@@ -121,8 +121,7 @@ class DrawTilesScope():
         self.visualizer.drawers.remove(self.fun_instance)
 
 
-class DebugLogScope():
-
+class DebugLogScope:
     def __init__(self, visualizer, txt, color):
         self.visualizer = visualizer
         self.txt = txt
@@ -136,12 +135,19 @@ class DebugLogScope():
 
 
 class Visualizer:
-
-    def __init__(self, env, tileset_path='/workspace/heur/tilesets/3.6.1tiles32.png', tile_size=32,
-                 start_visualize=None, show=False, output_dir=None, frame_skipping=None):
+    def __init__(
+        self,
+        env,
+        tileset_path="/workspace/heur/tilesets/3.6.1tiles32.png",
+        tile_size=32,
+        start_visualize=None,
+        show=False,
+        output_dir=None,
+        frame_skipping=None,
+    ):
         self.env = env
         self.tile_size = tile_size
-        self._window_name = 'NetHackVis'
+        self._window_name = "NetHackVis"
         self.show = show
         self.start_visualize = start_visualize
         self.output_dir = output_dir
@@ -150,7 +156,7 @@ class Visualizer:
 
         self.tileset = cv2.imread(tileset_path)[..., ::-1]
         if self.tileset is None:
-            raise FileNotFoundError(f'Tileset {tileset_path} not found')
+            raise FileNotFoundError(f"Tileset {tileset_path} not found")
         if self.tileset.shape[0] % tile_size != 0 or self.tileset.shape[1] % tile_size != 0:
             raise ValueError("Tileset and tile_size doesn't match modulo")
 
@@ -161,14 +167,15 @@ class Visualizer:
             y *= tile_size
             for x in range(w):
                 x *= tile_size
-                tiles.append(self.tileset[y:y + tile_size, x:x + tile_size])
+                tiles.append(self.tileset[y : y + tile_size, x : x + tile_size])
         self.tileset = np.array(tiles)
 
         from glyph2tile import glyph2tile
+
         self.glyph2tile = np.array(glyph2tile)
 
         if self.show:
-            print('Read tileset of size:', self.tileset.shape)
+            print("Read tileset of size:", self.tileset.shape)
 
         self.action_history = list()
 
@@ -272,16 +279,21 @@ class Visualizer:
                 render_time = time.time() - render_start_time
             else:
                 render_time = None
-            agent_time = time.time() - self._dynamic_frame_skipping_last_end_time - \
-                         (render_time if render_time is not None else 0)
+            agent_time = (
+                time.time()
+                - self._dynamic_frame_skipping_last_end_time
+                - (render_time if render_time is not None else 0)
+            )
 
             if render_start_time is not None:
-                self._dynamic_frame_skipping_render_time = \
-                    self._dynamic_frame_skipping_render_time * self._dynamic_frame_skipping_exp() + \
-                    render_time * (1 - self._dynamic_frame_skipping_exp())
-            self._dynamic_frame_skipping_agent_time = \
-                self._dynamic_frame_skipping_agent_time * self._dynamic_frame_skipping_exp() + \
-                agent_time * (1 - self._dynamic_frame_skipping_exp())
+                self._dynamic_frame_skipping_render_time = (
+                    self._dynamic_frame_skipping_render_time * self._dynamic_frame_skipping_exp()
+                    + render_time * (1 - self._dynamic_frame_skipping_exp())
+                )
+            self._dynamic_frame_skipping_agent_time = (
+                self._dynamic_frame_skipping_agent_time * self._dynamic_frame_skipping_exp()
+                + agent_time * (1 - self._dynamic_frame_skipping_exp())
+            )
 
         self._dynamic_frame_skipping_last_end_time = time.time()
 
@@ -297,8 +309,11 @@ class Visualizer:
 
             if self.frame_skipping is None:
                 # dynamic frame skipping
-                frame_skipping = self._dynamic_frame_skipping_render_time / self._dynamic_frame_skipping_agent_time / \
-                                 self._dynamic_frame_skipping_threshold
+                frame_skipping = (
+                    self._dynamic_frame_skipping_render_time
+                    / self._dynamic_frame_skipping_agent_time
+                    / self._dynamic_frame_skipping_threshold
+                )
                 if not self._force_next_frame and self.frame_counter <= frame_skipping:
                     return False
                 else:
@@ -317,7 +332,7 @@ class Visualizer:
 
             render_start_time = time.time()
 
-            glyphs = self.last_obs['glyphs']
+            glyphs = self.last_obs["glyphs"]
             tiles_idx = self.glyph2tile[glyphs]
             tiles = self.tileset[tiles_idx.reshape(-1)]
             scene_vis = _draw_grid(tiles, glyphs.shape[1])
@@ -343,7 +358,7 @@ class Visualizer:
         return True
 
     def _draw_bottombar(self, width):
-        height = FONT_SIZE * len(self.last_obs['tty_chars'])
+        height = FONT_SIZE * len(self.last_obs["tty_chars"])
         tty = self._draw_tty(self.last_obs, width - width // 2, height)
         stats = self._draw_stats(width // 2, height)
         return np.concatenate([tty, stats], axis=1)
@@ -356,13 +371,14 @@ class Visualizer:
 
         # game info
         i = 0
-        txt = [f'Level num: {self.env.agent.current_level().level_number}',
-               f'Dung num: {self.env.agent.current_level().dungeon_number}',
-               f'Step: {self.env.step_count}',
-               f'Turn: {self.env.agent._last_turn}',
-               f'Score: {self.env.score}',
-               ]
-        _put_text(ret, ' | '.join(txt), (0, i * FONT_SIZE), color=(255, 255, 255))
+        txt = [
+            f"Level num: {self.env.agent.current_level().level_number}",
+            f"Dung num: {self.env.agent.current_level().dungeon_number}",
+            f"Step: {self.env.step_count}",
+            f"Turn: {self.env.agent._last_turn}",
+            f"Score: {self.env.score}",
+        ]
+        _put_text(ret, " | ".join(txt), (0, i * FONT_SIZE), color=(255, 255, 255))
         i += 3
 
         # general character info
@@ -372,53 +388,59 @@ class Visualizer:
             {v: k for k, v in ch.name_to_alignment.items()}[ch.alignment],
             {v: k for k, v in ch.name_to_gender.items()}[ch.gender],
         ]
-        _put_text(ret, ' | '.join(txt), (0, i * FONT_SIZE))
+        _put_text(ret, " | ".join(txt), (0, i * FONT_SIZE))
         i += 1
-        txt = [f'HP: {self.env.agent.blstats.hitpoints} / {self.env.agent.blstats.max_hitpoints}',
-               f'LVL: {self.env.agent.blstats.experience_level}',
-               f'ENERGY: {self.env.agent.blstats.energy} / {self.env.agent.blstats.max_energy}',
-               ]
+        txt = [
+            f"HP: {self.env.agent.blstats.hitpoints} / {self.env.agent.blstats.max_hitpoints}",
+            f"LVL: {self.env.agent.blstats.experience_level}",
+            f"ENERGY: {self.env.agent.blstats.energy} / {self.env.agent.blstats.max_energy}",
+        ]
         hp_ratio = self.env.agent.blstats.hitpoints / self.env.agent.blstats.max_hitpoints
-        hp_color = cv2.applyColorMap(np.array([[130 - int((1 - hp_ratio) * 110)]], dtype=np.uint8), cv2.COLORMAP_TURBO)[0, 0]
-        _put_text(ret, ' | '.join(txt), (0, i * FONT_SIZE), color=tuple(map(int, hp_color)))
+        hp_color = cv2.applyColorMap(np.array([[130 - int((1 - hp_ratio) * 110)]], dtype=np.uint8), cv2.COLORMAP_TURBO)[
+            0, 0
+        ]
+        _put_text(ret, " | ".join(txt), (0, i * FONT_SIZE), color=tuple(map(int, hp_color)))
         i += 2
-
 
         # proficiency info
         colors = {
-            'Basic': (100, 100, 255),
-            'Skilled': (100, 255, 100),
-            'Expert': (100, 255, 255),
-            'Master': (255, 255, 100),
-            'Grand Master': (255, 100, 100),
+            "Basic": (100, 100, 255),
+            "Skilled": (100, 255, 100),
+            "Expert": (100, 255, 255),
+            "Master": (255, 255, 100),
+            "Grand Master": (255, 100, 100),
         }
         for line in ch.get_skill_str_list():
-            if 'Unskilled' not in line:
-                _put_text(ret, line, (0, i * FONT_SIZE), color=colors[line.split('-')[-1]])
+            if "Unskilled" not in line:
+                _put_text(ret, line, (0, i * FONT_SIZE), color=colors[line.split("-")[-1]])
                 i += 1
         unskilled = []
         for line in ch.get_skill_str_list():
-            if 'Unskilled' in line:
-                unskilled.append(line.split('-')[0])
-        _put_text(ret, '|'.join(unskilled), (0, i * FONT_SIZE), color=(100, 100, 100))
+            if "Unskilled" in line:
+                unskilled.append(line.split("-")[0])
+        _put_text(ret, "|".join(unskilled), (0, i * FONT_SIZE), color=(100, 100, 100))
         i += 2
-        _put_text(ret, 'Unarmed bonus: ' + str(ch.get_melee_bonus(None)), (0, i * FONT_SIZE))
+        _put_text(ret, "Unarmed bonus: " + str(ch.get_melee_bonus(None)), (0, i * FONT_SIZE))
         i += 2
 
         stats = list(self.env.agent.stats_logger.get_stats_dict().items())
         stats = [(k, v) for k, v in stats if v != 0]
         for j in range((len(stats) + 2) // 3):
-            _put_text(ret, ' | '.join(f'{k}={v}' for k, v in stats[j * 3: (j + 1) * 3]),
-                      (0, i * FONT_SIZE), color=(100, 100, 100))
+            _put_text(
+                ret,
+                " | ".join(f"{k}={v}" for k, v in stats[j * 3 : (j + 1) * 3]),
+                (0, i * FONT_SIZE),
+                color=(100, 100, 100),
+            )
             i += 1
         i += 1
 
-        if hasattr(self.env.agent.character, 'known_spells'):
-            _put_text(ret, 'Known spells: ' + str(list(self.env.agent.character.known_spells)), (0, i * FONT_SIZE))
+        if hasattr(self.env.agent.character, "known_spells"):
+            _put_text(ret, "Known spells: " + str(list(self.env.agent.character.known_spells)), (0, i * FONT_SIZE))
             i += 1
 
         monsters = [(dis, y, x, mon.mname) for dis, y, x, mon, _ in self.env.agent.get_visible_monsters()]
-        _put_text(ret, 'Monsters: ' + str(monsters), (0, i * FONT_SIZE))
+        _put_text(ret, "Monsters: " + str(monsters), (0, i * FONT_SIZE))
 
         _draw_frame(ret)
         return ret
@@ -446,9 +468,9 @@ class Visualizer:
         return vis
 
     def _update_log_message_history(self):
-        txt = ''
+        txt = ""
         if self.env.agent is not None:
-            txt = ' | '.join(self.log_messages)
+            txt = " | ".join(self.log_messages)
         # if txt:
         self.log_messages_history.append(txt)
 
@@ -483,7 +505,7 @@ class Visualizer:
         for i in range(HISTORY_SIZE):
             if i >= len(self.popup_history):
                 break
-            txt = '|'.join(self.popup_history[-i - 1])
+            txt = "|".join(self.popup_history[-i - 1])
             if i == 0:
                 _put_text(messages_vis, txt, (0, i * FONT_SIZE), color=(255, 255, 255))
             else:
@@ -492,14 +514,14 @@ class Visualizer:
         return messages_vis
 
     def _update_message_history(self):
-        txt = ''
+        txt = ""
         if self.env.agent is not None:
             txt = self.env.agent.message
         # if txt:
         self.message_history.append(txt)
 
     def _update_popup_history(self):
-        txt = ''
+        txt = ""
         if self.env.agent is not None:
             txt = self.env.agent.popup
         # if txt:
@@ -507,8 +529,8 @@ class Visualizer:
 
     def _draw_tty(self, obs, width, height):
         vis = np.zeros((height, width, 3)).astype(np.uint8)
-        for i, line in enumerate(obs['tty_chars']):
-            txt = ''.join([chr(i) for i in line])
+        for i, line in enumerate(obs["tty_chars"]):
+            txt = "".join([chr(i) for i in line])
             _put_text(vis, txt, (0, i * FONT_SIZE), console=True)
         _draw_frame(vis)
         return vis
@@ -517,7 +539,7 @@ class Visualizer:
         from item import Item
 
         bg_color = {
-            nh.WAND_CLASS : np.array([0, 50, 50], dtype=np.uint8),
+            nh.WAND_CLASS: np.array([0, 50, 50], dtype=np.uint8),
             nh.FOOD_CLASS: np.array([0, 50, 0], dtype=np.uint8),
             nh.ARMOR_CLASS: np.array([50, 50, 0], dtype=np.uint8),
             nh.RING_CLASS: np.array([50, 50, 0], dtype=np.uint8),
@@ -525,7 +547,7 @@ class Visualizer:
             nh.POTION_CLASS: np.array([0, 0, 50], dtype=np.uint8),
         }
 
-        indent = int((width - 1) * (1 - 0.9 ** indent))
+        indent = int((width - 1) * (1 - 0.9**indent))
 
         vis = np.zeros((round(height * 0.9), width - indent, 3)).astype(np.uint8)
         if item.category in bg_color:
@@ -539,10 +561,10 @@ class Visualizer:
             _put_text(vis, str(letter), (0, 0))
 
         status_str, status_col = {
-            Item.UNKNOWN: (' ', (255, 255, 255)),
-            Item.CURSED: ('C', (255, 0, 0)),
-            Item.UNCURSED: ('U', (0, 255, 255)),
-            Item.BLESSED: ('B', (0, 255, 0)),
+            Item.UNKNOWN: (" ", (255, 255, 255)),
+            Item.CURSED: ("C", (255, 0, 0)),
+            Item.UNCURSED: ("U", (0, 255, 255)),
+            Item.BLESSED: ("B", (0, 255, 0)),
         }[item.status]
         _put_text(vis, status_str, (FONT_SIZE, 0), color=status_col)
 
@@ -552,11 +574,11 @@ class Visualizer:
         best_launcher, best_ammo = self.env.agent.inventory.get_best_ranged_set()
         best_melee = self.env.agent.inventory.get_best_melee_weapon()
         if item == best_launcher:
-            _put_text(vis, 'L', (FONT_SIZE * 3, 0), color=(255, 255, 255))
+            _put_text(vis, "L", (FONT_SIZE * 3, 0), color=(255, 255, 255))
         if item == best_ammo:
-            _put_text(vis, 'A', (FONT_SIZE * 3, 0), color=(255, 255, 255))
+            _put_text(vis, "A", (FONT_SIZE * 3, 0), color=(255, 255, 255))
         if item == best_melee:
-            _put_text(vis, 'M', (FONT_SIZE * 3, 0), color=(255, 255, 255))
+            _put_text(vis, "M", (FONT_SIZE * 3, 0), color=(255, 255, 255))
 
         if item.is_weapon():
             _put_text(vis, str(self.env.agent.character.get_melee_bonus(item)), (FONT_SIZE * 4, 0))
@@ -564,8 +586,12 @@ class Visualizer:
         _put_text(vis, str(item), (FONT_SIZE * 8, round(FONT_SIZE * -0.1)), scale=FONT_SIZE / 40)
         # if len(item.objs) > 1:
         vis = np.concatenate([vis, np.zeros((vis.shape[0] // 2, vis.shape[1], 3), dtype=np.uint8)])
-        _put_text(vis, str(len(item.objs)) + ' | ' + ' | '.join((o.name for o in item.objs)),
-                  (0, round(FONT_SIZE * 0.8)), scale=FONT_SIZE / 40)
+        _put_text(
+            vis,
+            str(len(item.objs)) + " | " + " | ".join((o.name for o in item.objs)),
+            (0, round(FONT_SIZE * 0.8)),
+            scale=FONT_SIZE / 40,
+        )
 
         _draw_frame(vis, color=(80, 80, 80), thickness=2)
 
@@ -583,8 +609,9 @@ class Visualizer:
         if self.env.agent:
             item_h = round(FONT_SIZE * 1.4)
             tiles = []
-            for i, (letter, item) in enumerate(zip(self.env.agent.inventory.items.all_letters,
-                                                   self.env.agent.inventory.items.all_items)):
+            for i, (letter, item) in enumerate(
+                zip(self.env.agent.inventory.items.all_letters, self.env.agent.inventory.items.all_items)
+            ):
 
                 def rec_draw(item, letter, indent=0):
                     tiles.append(self._draw_item(letter, item, width, item_h, indent=indent))
@@ -603,8 +630,8 @@ class Visualizer:
         return vis
 
     def save_end_history(self):
-        print('SAVING', self.output_dir)
+        print("SAVING", self.output_dir)
         for i, render in enumerate(list(self.renders_history)):
             render = render[..., ::-1]
-            out_path = self.output_dir / (str(i).rjust(5, '0') + '.jpg')
+            out_path = self.output_dir / (str(i).rjust(5, "0") + ".jpg")
             cv2.imwrite(str(out_path), render)

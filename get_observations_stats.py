@@ -1,15 +1,15 @@
-import json
 import base64
+import json
 import pickle
 from collections import defaultdict
 from pathlib import Path
 
-import seaborn as sns
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import seaborn as sns
 
-with open('/tmp/vis/observations.txt') as f:
+with open("/tmp/vis/observations.txt") as f:
     observations = defaultdict(list)
     for line in f.readlines():
         observation = pickle.loads(base64.b64decode(line))
@@ -23,9 +23,9 @@ def plot_column(df, column):
     try:
         sns.histplot(df[column])
     except ValueError:
-        print(f'ValueError when plotting {column}')
+        print(f"ValueError when plotting {column}")
     except IndexError:
-        print(f'IndexError when plotting {column}')
+        print(f"IndexError when plotting {column}")
 
 
 def plot_df(df_name, df, max_plots_in_row=10):
@@ -36,7 +36,7 @@ def plot_df(df_name, df, max_plots_in_row=10):
     for i, c in enumerate(df.columns):
         row = i // max_plots_in_row
         col = i % max_plots_in_row
-        ax = fig.add_subplot(gridspec[i:i + 1])
+        ax = fig.add_subplot(gridspec[i : i + 1])
         ax.title.set_text(c)
         plt.sca(ax)
         plot_column(df, c)
@@ -49,7 +49,7 @@ stats = defaultdict(dict)
 
 for k, v in observations.items():
     v = np.array(v)
-    print('----------------------', k, v.shape)
+    print("----------------------", k, v.shape)
     if len(v.shape) > 2:
         v = v.transpose((0, 2, 3, 1))
         v = v.reshape(-1, v.shape[-1])
@@ -63,11 +63,11 @@ for k, v in observations.items():
     print(std)
     print(minv)
 
-    stats[k]['mean'] = mean.tolist()
-    stats[k]['std'] = mean.tolist()
-    stats[k]['min'] = mean.tolist()
+    stats[k]["mean"] = mean.tolist()
+    stats[k]["std"] = mean.tolist()
+    stats[k]["min"] = mean.tolist()
 
-    if k == 'heur_action_priorities':
+    if k == "heur_action_priorities":
         for i in range(v_normalized.shape[1]):
             v_normalized[:, i][np.isnan(v_normalized[:, i])] = minv[i]
     else:
@@ -76,5 +76,5 @@ for k, v in observations.items():
     # plot_df(k + ' normalized', pd.DataFrame(v_normalized).sample(10000), 5)
     print()
 
-with open('rl_features_stats.json', 'w') as f:
+with open("rl_features_stats.json", "w") as f:
     json.dump(stats, f, indent=4)

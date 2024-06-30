@@ -10,12 +10,13 @@ from heur.glyph import C, G
 try:
     import numba as nb
 except ImportError:
+
     class nb:
         b1 = bool
         njit = lambda *a, **k: (lambda f: f)
 
 
-@nb.njit('b1[:,:](i2[:,:],i2[:,:],i4)', cache=True)
+@nb.njit("b1[:,:](i2[:,:],i2[:,:],i4)", cache=True)
 def disappearance_mask(old_mons, new_mons, max_radius):
     ret = np.zeros_like(new_mons, dtype=nb.b1)
     for y in range(new_mons.shape[0]):
@@ -23,12 +24,17 @@ def disappearance_mask(old_mons, new_mons, max_radius):
             glyph = old_mons[y, x]
             if glyph == -1:
                 continue
-            ret[y, x] = (new_mons[max(0, y - max_radius) : min(y + max_radius + 1, new_mons.shape[0]),
-                                  max(0, x - max_radius) : min(x + max_radius + 1, new_mons.shape[1])] != glyph).all()
+            ret[y, x] = (
+                new_mons[
+                    max(0, y - max_radius) : min(y + max_radius + 1, new_mons.shape[0]),
+                    max(0, x - max_radius) : min(x + max_radius + 1, new_mons.shape[1]),
+                ]
+                != glyph
+            ).all()
     return ret
 
 
-@nb.njit('optional(b1[:,:])(i2[:,:],i2[:,:],i2[:,:],i4)', cache=True)
+@nb.njit("optional(b1[:,:])(i2[:,:],i2[:,:],i2[:,:],i4)", cache=True)
 def figure_out_monster_movement(peaceful_mons, aggressive_mons, new_mons, max_radius):
     ret_peaceful_mons = np.zeros_like(peaceful_mons, dtype=nb.b1)
     for y in range(new_mons.shape[0]):
@@ -39,10 +45,8 @@ def figure_out_monster_movement(peaceful_mons, aggressive_mons, new_mons, max_ra
 
             can_be_peaceful = False
             can_be_aggressive = False
-            for py in range(max(0, y - max_radius),
-                            min(y + max_radius + 1, new_mons.shape[0])):
-                for px in range(max(0, x - max_radius),
-                                min(x + max_radius + 1, new_mons.shape[1])):
+            for py in range(max(0, y - max_radius), min(y + max_radius + 1, new_mons.shape[0])):
+                for px in range(max(0, x - max_radius), min(x + max_radius + 1, new_mons.shape[1])):
                     if peaceful_mons[py, px] == glyph:
                         can_be_peaceful = True
                     if aggressive_mons[py, px] == glyph:
@@ -69,17 +73,17 @@ class MonsterTracker:
         if utils.any_in(self.agent.glyphs, G.SWALLOW):
             return {}
         with self.agent.atom_operation():
-            self.agent.step(A.Command.WHATIS, iter(['M']))
-            if 'No monsters are currently shown on the map.' in self.agent.message:
+            self.agent.step(A.Command.WHATIS, iter(["M"]))
+            if "No monsters are currently shown on the map." in self.agent.message:
                 return {}
             try:
-                index = self.agent.popup.index('All monsters currently shown on the map:')
+                index = self.agent.popup.index("All monsters currently shown on the map:")
             except IndexError:
                 assert 0, (self.agent.message, self.agent.popup)
             regex = re.compile(r"^<(\d+),(\d+)>  ([\x00-\x7F])  ([a-zA-z-,' ]+)$")
 
             monsters = {}
-            for line in self.agent.popup[index + 1:]:
+            for line in self.agent.popup[index + 1 :]:
                 r = regex.search(line)
                 assert r is not None, line
                 x, y, char, name = r.groups()
@@ -117,11 +121,18 @@ class MonsterTracker:
         if not self.agent.character.prop.hallu:
             if new_peaceful_mons is None:
                 all_monsters = self.take_all_monsters()
-                self.monster_mask, pet_mask = self._get_current_masks()  # glyphs can change sometimes after calling `take_all_monsters`
+                (
+                    self.monster_mask,
+                    pet_mask,
+                ) = self._get_current_masks()  # glyphs can change sometimes after calling `take_all_monsters`
                 for (y, x), name in all_monsters.items():
-                    if not (self.monster_mask[y, x] or pet_mask[y, x] or (y, x) == (self.agent.blstats.y, self.agent.blstats.x)):
-                        raise AgentPanic('monsters differs between list and glyphs')
-                    if 'peaceful' in name and not pet_mask[y, x]:
+                    if not (
+                        self.monster_mask[y, x]
+                        or pet_mask[y, x]
+                        or (y, x) == (self.agent.blstats.y, self.agent.blstats.x)
+                    ):
+                        raise AgentPanic("monsters differs between list and glyphs")
+                    if "peaceful" in name and not pet_mask[y, x]:
                         self.peaceful_monster_mask[y, x] = 1
             else:
                 self.peaceful_monster_mask = new_peaceful_mons

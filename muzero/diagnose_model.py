@@ -1,9 +1,8 @@
 import matplotlib.pyplot as plt
+import models
 import numpy
 import seaborn
 import torch
-
-import models
 from self_play import MCTS, Node, SelfPlay
 
 
@@ -25,17 +24,13 @@ class DiagnoseModel:
         self.model.set_weights(checkpoint["weights"])
         self.model.eval()
 
-    def get_virtual_trajectory_from_obs(
-        self, observation, horizon, plot=True, to_play=0
-    ):
+    def get_virtual_trajectory_from_obs(self, observation, horizon, plot=True, to_play=0):
         """
         MuZero plays a game but uses its model instead of using the environment.
         We still do an MCTS at each step.
         """
         trajectory_info = Trajectoryinfo("Virtual trajectory", self.config)
-        root, mcts_info = MCTS(self.config).run(
-            self.model, observation, self.config.action_space, to_play, True
-        )
+        root, mcts_info = MCTS(self.config).run(self.model, observation, self.config.action_space, to_play, True)
         trajectory_info.store_info(root, mcts_info, None, numpy.NaN)
 
         virtual_to_play = to_play
@@ -67,18 +62,14 @@ class DiagnoseModel:
             root, mcts_info = MCTS(self.config).run(
                 self.model, None, self.config.action_space, virtual_to_play, True, root
             )
-            trajectory_info.store_info(
-                root, mcts_info, action, reward, new_prior_root_value=value
-            )
+            trajectory_info.store_info(root, mcts_info, action, reward, new_prior_root_value=value)
 
         if plot:
             trajectory_info.plot_trajectory()
 
         return trajectory_info
 
-    def compare_virtual_with_real_trajectories(
-        self, first_obs, game, horizon, plot=True
-    ):
+    def compare_virtual_with_real_trajectories(self, first_obs, game, horizon, plot=True):
         """
         First, MuZero plays a game but uses its model instead of using the environment.
         Then, MuZero plays the optimal trajectory according precedent trajectory but performs it in the
@@ -86,9 +77,7 @@ class DiagnoseModel:
         It does an MCTS too, but doesn't take it into account.
         All information during the two trajectories are recorded and displayed.
         """
-        virtual_trajectory_info = self.get_virtual_trajectory_from_obs(
-            first_obs, horizon, False
-        )
+        virtual_trajectory_info = self.get_virtual_trajectory_from_obs(first_obs, horizon, False)
         real_trajectory_info = Trajectoryinfo("Real trajectory", self.config)
         trajectory_divergence_index = None
         real_trajectory_end_reason = "Reached horizon"
@@ -110,7 +99,9 @@ class DiagnoseModel:
                 action = SelfPlay.select_action(root, 0)
                 if trajectory_divergence_index is None:
                     trajectory_divergence_index = i
-                    real_trajectory_end_reason = f"Virtual trajectory reached an illegal move at timestep {trajectory_divergence_index}."
+                    real_trajectory_end_reason = (
+                        f"Virtual trajectory reached an illegal move at timestep {trajectory_divergence_index}."
+                    )
 
             observation, reward, done = game.step(action)
             root, mcts_info = MCTS(self.config).run(
@@ -166,9 +157,7 @@ class DiagnoseModel:
                 graph.edge(str(parent_id), str(node_id), constraint="false")
 
             if len(node.children) != 0:
-                best_visit_count = max(
-                    [child.visit_count for child in node.children.values()]
-                )
+                best_visit_count = max([child.visit_count for child in node.children.values()])
             else:
                 best_visit_count = False
             for action, child in node.children.items():
@@ -177,9 +166,7 @@ class DiagnoseModel:
                         child,
                         action,
                         node_id,
-                        True
-                        if best_visit_count and child.visit_count == best_visit_count
-                        else False,
+                        True if best_visit_count and child.visit_count == best_visit_count else False,
                     )
 
         traverse(root, None, None, True)
@@ -216,9 +203,7 @@ class Trajectoryinfo:
             self.reward_history.append(reward)
         self.prior_policies.append(
             [
-                root.children[action].prior
-                if action in root.children.keys()
-                else numpy.NaN
+                root.children[action].prior if action in root.children.keys() else numpy.NaN
                 for action in self.config.action_space
             ]
         )
@@ -232,23 +217,17 @@ class Trajectoryinfo:
         )
         self.values_after_planning.append(
             [
-                root.children[action].value()
-                if action in root.children.keys()
-                else numpy.NaN
+                root.children[action].value() if action in root.children.keys() else numpy.NaN
                 for action in self.config.action_space
             ]
         )
         self.prior_root_value.append(
-            mcts_info["root_predicted_value"]
-            if not new_prior_root_value
-            else new_prior_root_value
+            mcts_info["root_predicted_value"] if not new_prior_root_value else new_prior_root_value
         )
         self.root_value_after_planning.append(root.value())
         self.prior_rewards.append(
             [
-                root.children[action].reward
-                if action in root.children.keys()
-                else numpy.NaN
+                root.children[action].reward if action in root.children.keys() else numpy.NaN
                 for action in self.config.action_space
             ]
         )
@@ -331,9 +310,7 @@ class Trajectoryinfo:
         name = "Prior rewards"
         print(name, self.prior_rewards, "\n")
         plt.figure(self.title + name)
-        ax = seaborn.heatmap(
-            self.prior_rewards, mask=numpy.isnan(self.prior_rewards), annot=True
-        )
+        ax = seaborn.heatmap(self.prior_rewards, mask=numpy.isnan(self.prior_rewards), annot=True)
         ax.set(xlabel="Action", ylabel="Timestep")
         ax.set_title(name)
 

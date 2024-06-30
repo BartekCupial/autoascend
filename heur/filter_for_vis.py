@@ -8,30 +8,32 @@ def interesting_reason(txt):
     txt = txt.lower()
     # return 'Error' not in txt
     # return 'starved' in txt.lower()
-    return ('food' in txt or 'fainted' in txt or 'starved' in txt)
+    return "food" in txt or "fainted" in txt or "starved" in txt
     # return 'captain' in txt or 'shop' in txt
     # return 'rotten' in txt
-    return ('food' not in txt
-            and 'shop' not in txt
-            and 'falling rock' not in txt
-            and 'Error' not in txt
-            and 'starved' not in txt
-            and 'timeout' not in txt
-            and 'sleeping' not in txt
-            and 'wand' not in txt
-            and 'bolt' not in txt
-            and 'missile' not in txt
-            and 'rotted' not in txt
-            and 'guard' not in txt
-            and 'quit' not in txt)
+    return (
+        "food" not in txt
+        and "shop" not in txt
+        and "falling rock" not in txt
+        and "Error" not in txt
+        and "starved" not in txt
+        and "timeout" not in txt
+        and "sleeping" not in txt
+        and "wand" not in txt
+        and "bolt" not in txt
+        and "missile" not in txt
+        and "rotted" not in txt
+        and "guard" not in txt
+        and "quit" not in txt
+    )
 
 
-def process(path='/tmp/nh_sim.json'):
+def process(path="/tmp/nh_sim.json"):
     ret = dict()
 
-    with open(path, 'r') as f:
+    with open(path, "r") as f:
         df = pd.DataFrame(json.load(f))
-    df['role'] = [ch[:3] for ch in df.character]
+    df["role"] = [ch[:3] for ch in df.character]
 
     for row in df.itertuples():
         # if row.score > 2200:
@@ -41,7 +43,7 @@ def process(path='/tmp/nh_sim.json'):
             print(row.seed[0], row.steps, row.end_reason)
             ret[row.seed[0]] = row.steps - 128
 
-    with open('filtered.json', 'w') as f:
+    with open("filtered.json", "w") as f:
         json.dump(ret, f)
 
 
@@ -51,4 +53,3 @@ def process(path='/tmp/nh_sim.json'):
 
 
 process()
-

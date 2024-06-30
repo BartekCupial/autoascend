@@ -1,26 +1,25 @@
-import os
 import contextlib
 import ctypes
+import os
 import sys
+import tempfile
 import threading
 import time
 import traceback
-import jsonlines
-import tempfile
+from multiprocessing import Pool
 from pathlib import Path
 
+import gym
+import jsonlines
 import numpy as np
-from multiprocessing import Pool
 from nle import nethack as nh
 from nle.nethack.actions import ACTIONS
 from nle_language_wrapper import NLELanguageWrapper
 from nle_language_wrapper.nle_language_obsv import NLELanguageObsv
 
-import gym
-
+from heur.action_textmap import nle_action_textmap
 from heur.agent import Agent
 from heur.character import Character
-from heur.action_textmap import nle_action_textmap
 
 NH_ACTION_STR_TO_IDX = {str(ACTIONS[i]): i for i in range(len(ACTIONS))}
 NH_ACTION_IDX_TO_STR = {v: k for (k, v) in NH_ACTION_STR_TO_IDX.items()}
@@ -29,6 +28,7 @@ NH_ACTION_IDX_TO_STR = {v: k for (k, v) in NH_ACTION_STR_TO_IDX.items()}
 class AgentStepTimeout(KeyboardInterrupt):
     # it inheirits from KeyboardInterrupt because agent never catches it
     pass
+
 
 class EnvWrapper:
     def __init__(self, env):
@@ -49,7 +49,7 @@ class EnvWrapper:
         obs, reward, done, info = self.env.step(nh.actions.ACTIONS.index(action))
         self.score += reward
         self.step_count += 1
-        #if self.score >= 5650:
+        # if self.score >= 5650:
         #    if self.agent.character.role not in []:#self.agent.character.VALKYRIE]:
         #        for _ in range(5):
         #            action = nh.actions.ACTIONS.index(nh.actions.Command.ESC)
@@ -96,9 +96,10 @@ class EnvWrapper:
                     if thread is threading.main_thread():
                         break
                 else:
-                    assert 0, 'main thread not found'
-                out = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(thread_id),
-                                                                 ctypes.py_object(AgentStepTimeout))
+                    assert 0, "main thread not found"
+                out = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(thread_id), ctypes.py_object(AgentStepTimeout)
+                )
                 assert out == 1, out
                 break
 
@@ -116,13 +117,13 @@ class EnvWrapper:
 
 def worker(args):
     from_, to_, savedir, textsavedir = args
-    
+
     os.makedirs(savedir, exist_ok=True)
     savedir = tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S_"), dir=savedir)
     textsavedir = os.path.join(textsavedir, Path(savedir).name)
     os.makedirs(textsavedir, exist_ok=True)
-    
-    orig_env = gym.make('NetHackChallenge-v0', save_ttyrec_every=1, savedir=savedir)
+
+    orig_env = gym.make("NetHackChallenge-v0", save_ttyrec_every=1, savedir=savedir)
 
     nle_language = NLELanguageObsv()
 
@@ -132,18 +133,13 @@ def worker(args):
         try:
             env.main()
         except BaseException as e:
-            print(''.join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
+            print("".join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
 
         summary = env.get_summary()
 
         json_safe_summary = {}
         for key, val in summary.items():
-            if (
-                isinstance(val, int)
-                or isinstance(val, str)
-                or isinstance(val, float)
-                or isinstance(val, tuple)
-            ):
+            if isinstance(val, int) or isinstance(val, str) or isinstance(val, float) or isinstance(val, tuple):
                 json_safe_summary[key] = val
             else:
                 json_safe_summary[key] = val.item()
@@ -155,22 +151,12 @@ def worker(args):
         for ts in range(len(data)):
             datum = data[ts]
 
-            txt_blstats = nle_language.text_blstats(datum["blstats"]).decode(
-                "latin-1"
-            )
-            txt_glyphs = nle_language.text_glyphs(
-                datum["glyphs"], datum["blstats"]
-            ).decode("latin-1")
-            txt_message = nle_language.text_message(datum["tty_chars"]).decode(
-                "latin-1"
-            )
-            txt_inventory = nle_language.text_inventory(
-                datum["inv_strs"], datum["inv_letters"]
-            ).decode("latin-1")
+            txt_blstats = nle_language.text_blstats(datum["blstats"]).decode("latin-1")
+            txt_glyphs = nle_language.text_glyphs(datum["glyphs"], datum["blstats"]).decode("latin-1")
+            txt_message = nle_language.text_message(datum["tty_chars"]).decode("latin-1")
+            txt_inventory = nle_language.text_inventory(datum["inv_strs"], datum["inv_letters"]).decode("latin-1")
             txt_cursor = (
-                nle_language.text_cursor(
-                    datum["glyphs"], datum["blstats"], datum["tty_chars"]
-                ).decode("latin-1"),
+                nle_language.text_cursor(datum["glyphs"], datum["blstats"], datum["tty_chars"]).decode("latin-1"),
             )
             if ts < len(data) - 1:
                 txt_action = nle_action_textmap[data[ts + 1]["action"]]
@@ -194,13 +180,14 @@ def worker(args):
 
         scores.append(env.score)
 
-        print(f'Run {i} finished with score {env.score}', file=sys.stderr)
+        print(f"Run {i} finished with score {env.score}", file=sys.stderr)
 
         # avoid memory leaks
         del env
 
     orig_env.close()
     return scores
+
 
 if __name__ == "__main__":
     NUM_ASSESSMENTS = int(sys.argv[1])
@@ -210,20 +197,23 @@ if __name__ == "__main__":
 
     with Pool(NUM_THREADS) as pool:
         scores = list(
-            pool.map(worker, [
-                (
-                    i * NUM_ASSESSMENTS // NUM_THREADS,
-                    (i + 1) * NUM_ASSESSMENTS // NUM_THREADS,
-                    sys.argv[3],
-                    sys.argv[4],
-                )
-                for i in range(NUM_THREADS)
-            ]
-        ))
+            pool.map(
+                worker,
+                [
+                    (
+                        i * NUM_ASSESSMENTS // NUM_THREADS,
+                        (i + 1) * NUM_ASSESSMENTS // NUM_THREADS,
+                        sys.argv[3],
+                        sys.argv[4],
+                    )
+                    for i in range(NUM_THREADS)
+                ],
+            )
+        )
     scores = [s for ss in scores for s in ss]
 
-    print('scores  :', scores, file=sys.stderr)
-    print('duration:', time.time() - start_time, file=sys.stderr)
-    print('len     :', len(scores), file=sys.stderr)
-    print('median  :', np.median(scores), file=sys.stderr)
-    print('mean    :', np.mean(scores), file=sys.stderr)
+    print("scores  :", scores, file=sys.stderr)
+    print("duration:", time.time() - start_time, file=sys.stderr)
+    print("len     :", len(scores), file=sys.stderr)
+    print("median  :", np.median(scores), file=sys.stderr)
+    print("mean    :", np.mean(scores), file=sys.stderr)

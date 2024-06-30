@@ -1,9 +1,8 @@
 import argparse
+import os
 import sys
 import time
 import traceback
-import os
-
 from multiprocessing import Pool
 
 import gym

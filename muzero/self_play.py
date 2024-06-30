@@ -1,11 +1,10 @@
 import math
 import time
 
+import models
 import numpy
 import ray
 import torch
-
-import models
 
 
 class SelfPlayNoRay:
@@ -28,9 +27,7 @@ class SelfPlayNoRay:
         self.model.eval()
 
     def continuous_self_play(self, shared_storage, replay_buffer, test_mode=False):
-        while ray.get(
-            shared_storage.get_info.remote("training_step")
-        ) < self.config.training_steps and not ray.get(
+        while ray.get(shared_storage.get_info.remote("training_step")) < self.config.training_steps and not ray.get(
             shared_storage.get_info.remote("terminate")
         ):
             self.model.set_weights(ray.get(shared_storage.get_info.remote("weights")))
@@ -38,9 +35,7 @@ class SelfPlayNoRay:
             if not test_mode:
                 game_history = self.play_game(
                     self.config.visit_softmax_temperature_fn(
-                        trained_steps=ray.get(
-                            shared_storage.get_info.remote("training_step")
-                        )
+                        trained_steps=ray.get(shared_storage.get_info.remote("training_step"))
                     ),
                     self.config.temperature_threshold,
                     False,
@@ -65,9 +60,7 @@ class SelfPlayNoRay:
                     {
                         "episode_length": len(game_history.action_history) - 1,
                         "total_reward": sum(game_history.reward_history),
-                        "mean_value": numpy.mean(
-                            [value for value in game_history.root_values if value]
-                        ),
+                        "mean_value": numpy.mean([value for value in game_history.root_values if value]),
                     }
                 )
                 if 1 < len(self.config.players):
@@ -76,14 +69,12 @@ class SelfPlayNoRay:
                             "muzero_reward": sum(
                                 reward
                                 for i, reward in enumerate(game_history.reward_history)
-                                if game_history.to_play_history[i - 1]
-                                == self.config.muzero_player
+                                if game_history.to_play_history[i - 1] == self.config.muzero_player
                             ),
                             "opponent_reward": sum(
                                 reward
                                 for i, reward in enumerate(game_history.reward_history)
-                                if game_history.to_play_history[i - 1]
-                                != self.config.muzero_player
+                                if game_history.to_play_history[i - 1] != self.config.muzero_player
                             ),
                         }
                     )
@@ -94,12 +85,9 @@ class SelfPlayNoRay:
             if not test_mode and self.config.ratio:
                 while (
                     ray.get(shared_storage.get_info.remote("training_step"))
-                    / max(
-                        1, ray.get(shared_storage.get_info.remote("num_played_steps"))
-                    )
+                    / max(1, ray.get(shared_storage.get_info.remote("num_played_steps")))
                     < self.config.ratio
-                    and ray.get(shared_storage.get_info.remote("training_step"))
-                    < self.config.training_steps
+                    and ray.get(shared_storage.get_info.remote("training_step")) < self.config.training_steps
                     and not ray.get(shared_storage.get_info.remote("terminate"))
                 ):
                     time.sleep(0.5)
@@ -116,9 +104,7 @@ class SelfPlayNoRay:
         except StopIteration as e:
             return e.value
 
-    def play_game_generator(
-        self, temperature, temperature_threshold, render, opponent, muzero_player
-    ):
+    def play_game_generator(self, temperature, temperature_threshold, render, opponent, muzero_player):
         """
         Play one game with actions based on the Monte Carlo tree search at each moves.
         """
@@ -135,9 +121,7 @@ class SelfPlayNoRay:
             self.game.render()
 
         with torch.no_grad():
-            while (
-                not done and len(game_history.action_history) <= self.config.max_moves
-            ):
+            while not done and len(game_history.action_history) <= self.config.max_moves:
                 assert (
                     len(numpy.array(observation).shape) == 3
                 ), f"Observation should be 3 dimensionnal instead of {len(numpy.array(observation).shape)} dimensionnal. Got observation of shape: {numpy.array(observation).shape}"
@@ -161,20 +145,15 @@ class SelfPlayNoRay:
                     action = self.select_action(
                         root,
                         temperature
-                        if not temperature_threshold
-                        or len(game_history.action_history) < temperature_threshold
+                        if not temperature_threshold or len(game_history.action_history) < temperature_threshold
                         else 0,
                     )
 
                     if render:
                         print(f'Tree depth: {mcts_info["max_tree_depth"]}')
-                        print(
-                            f"Root value for player {to_play}: {root.value():.2f}"
-                        )
+                        print(f"Root value for player {to_play}: {root.value():.2f}")
                 else:
-                    action, root = self.select_opponent_action(
-                        opponent, stacked_observations
-                    )
+                    action, root = self.select_opponent_action(opponent, stacked_observations)
 
                 observation, reward, done, to_play, legal_actions = yield action
 
@@ -236,9 +215,7 @@ class SelfPlayNoRay:
         The temperature is changed dynamically with the visit_softmax_temperature function
         in the config.
         """
-        visit_counts = numpy.array(
-            [child.visit_count for child in node.children.values()], dtype="int32"
-        )
+        visit_counts = numpy.array([child.visit_count for child in node.children.values()], dtype="int32")
         actions = [action for action in node.children.keys()]
         if temperature == 0:
             action = actions[numpy.argmax(visit_counts)]
@@ -247,12 +224,11 @@ class SelfPlayNoRay:
         else:
             # See paper appendix Data Generation
             visit_count_distribution = visit_counts ** (1 / temperature)
-            visit_count_distribution = visit_count_distribution / sum(
-                visit_count_distribution
-            )
+            visit_count_distribution = visit_count_distribution / sum(visit_count_distribution)
             action = numpy.random.choice(actions, p=visit_count_distribution)
 
         return action
+
 
 SelfPlay = ray.remote(SelfPlayNoRay)
 
@@ -289,25 +265,16 @@ class MCTS:
             root_predicted_value = None
         else:
             root = Node(0)
-            observation = (
-                torch.tensor(observation)
-                .float()
-                .unsqueeze(0)
-                .to(next(model.parameters()).device)
-            )
+            observation = torch.tensor(observation).float().unsqueeze(0).to(next(model.parameters()).device)
             (
                 root_predicted_value,
                 reward,
                 policy_logits,
                 hidden_state,
             ) = model.initial_inference(observation)
-            root_predicted_value = models.support_to_scalar(
-                root_predicted_value, self.config.support_size
-            ).item()
+            root_predicted_value = models.support_to_scalar(root_predicted_value, self.config.support_size).item()
             reward = models.support_to_scalar(reward, self.config.support_size).item()
-            assert (
-                legal_actions
-            ), f"Legal actions should not be an empty array. Got {legal_actions}."
+            assert legal_actions, f"Legal actions should not be an empty array. Got {legal_actions}."
             assert set(legal_actions).issubset(
                 set(self.config.action_space)
             ), "Legal actions should be a subset of the action space."
@@ -376,16 +343,9 @@ class MCTS:
         """
         Select the child with the highest UCB score.
         """
-        max_ucb = max(
-            self.ucb_score(node, child, min_max_stats)
-            for action, child in node.children.items()
-        )
+        max_ucb = max(self.ucb_score(node, child, min_max_stats) for action, child in node.children.items())
         action = numpy.random.choice(
-            [
-                action
-                for action, child in node.children.items()
-                if self.ucb_score(node, child, min_max_stats) == max_ucb
-            ]
+            [action for action, child in node.children.items() if self.ucb_score(node, child, min_max_stats) == max_ucb]
         )
         return action, node.children[action]
 
@@ -394,10 +354,7 @@ class MCTS:
         The score for a node is based on its value, plus an exploration bonus based on the prior.
         """
         pb_c = (
-            math.log(
-                (parent.visit_count + self.config.pb_c_base + 1) / self.config.pb_c_base
-            )
-            + self.config.pb_c_init
+            math.log((parent.visit_count + self.config.pb_c_base + 1) / self.config.pb_c_base) + self.config.pb_c_init
         )
         pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
 
@@ -407,8 +364,7 @@ class MCTS:
             # Mean value Q
             value_score = min_max_stats.normalize(
                 child.reward
-                + self.config.discount
-                * (child.value() if len(self.config.players) == 1 else -child.value())
+                + self.config.discount * (child.value() if len(self.config.players) == 1 else -child.value())
             )
         else:
             value_score = 0
@@ -434,9 +390,7 @@ class MCTS:
                 node.visit_count += 1
                 min_max_stats.update(node.reward + self.config.discount * -node.value())
 
-                value = (
-                    -node.reward if node.to_play == to_play else node.reward
-                ) + self.config.discount * value
+                value = (-node.reward if node.to_play == to_play else node.reward) + self.config.discount * value
 
         else:
             raise NotImplementedError("More than two player mode not implemented.")
@@ -469,9 +423,7 @@ class Node:
         self.reward = reward
         self.hidden_state = hidden_state
 
-        policy_values = torch.softmax(
-            torch.tensor([policy_logits[0][a] for a in actions]), dim=0
-        ).tolist()
+        policy_values = torch.softmax(torch.tensor([policy_logits[0][a] for a in actions]), dim=0).tolist()
         policy = {a: policy_values[i] for i, a in enumerate(actions)}
         for action, p in policy.items():
             self.children[action] = Node(p)
@@ -510,12 +462,7 @@ class GameHistory:
         if root is not None:
             sum_visits = sum(child.visit_count for child in root.children.values())
             self.child_visits.append(
-                [
-                    root.children[a].visit_count / sum_visits
-                    if a in root.children
-                    else 0
-                    for a in action_space
-                ]
+                [root.children[a].visit_count / sum_visits if a in root.children else 0 for a in action_space]
             )
 
             self.root_values.append(root.value())
@@ -531,17 +478,12 @@ class GameHistory:
         index = index % len(self.observation_history)
 
         stacked_observations = self.observation_history[index].copy()
-        for past_observation_index in reversed(
-            range(index - num_stacked_observations, index)
-        ):
+        for past_observation_index in reversed(range(index - num_stacked_observations, index)):
             if 0 <= past_observation_index:
                 previous_observation = numpy.concatenate(
                     (
                         self.observation_history[past_observation_index],
-                        [
-                            numpy.ones_like(stacked_observations[0])
-                            * self.action_history[past_observation_index + 1]
-                        ],
+                        [numpy.ones_like(stacked_observations[0]) * self.action_history[past_observation_index + 1]],
                     )
                 )
             else:
@@ -552,9 +494,7 @@ class GameHistory:
                     )
                 )
 
-            stacked_observations = numpy.concatenate(
-                (stacked_observations, previous_observation)
-            )
+            stacked_observations = numpy.concatenate((stacked_observations, previous_observation))
 
         return stacked_observations
 

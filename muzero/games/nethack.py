@@ -1,8 +1,8 @@
 import ctypes
 import datetime
+import multiprocessing
 import os
 import queue
-import multiprocessing
 import traceback
 
 import gym
@@ -10,19 +10,17 @@ import nle
 import numpy as np
 import torch
 
-from .abstract_game import AbstractGame
 from heur import EnvWrapper
+
+from .abstract_game import AbstractGame
 
 
 class MuZeroConfig:
     def __init__(self, rl_model=None):
-
         # More information is available here: https://github.com/werner-duvaud/muzero-general/wiki/Hyperparameter-Optimization
 
         self.seed = 0  # Seed for numpy, torch and the game
         self.max_num_gpus = None  # Fix the maximum number of GPUs to use. It's usually faster to use a single GPU (set it to 1) if it has enough memory. None will use every GPUs available
-
-
 
         ### Game
         if rl_model is None:
@@ -30,22 +28,26 @@ class MuZeroConfig:
             game._kill_thread()
             rl_model = game.rl_model
             del game
-            if 'HACKDIR' in os.environ:
-                del os.environ['HACKDIR']  # nle leave some trashes that need to be clean up
+            if "HACKDIR" in os.environ:
+                del os.environ["HACKDIR"]  # nle leave some trashes that need to be clean up
 
-        self.observation_shape = rl_model.observation_shape()  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(len(rl_model.action_space)))  # Fixed list of all possible actions. You should only edit the length
+        self.observation_shape = (
+            rl_model.observation_shape()
+        )  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.action_space = list(
+            range(len(rl_model.action_space))
+        )  # Fixed list of all possible actions. You should only edit the length
 
-        #self.observation_shape = (98, 1, 1)
-        #self.action_space = list(range(9))
+        # self.observation_shape = (98, 1, 1)
+        # self.action_space = list(range(9))
         self.players = list(range(1))  # List of players. You should only edit the length
-        self.stacked_observations = 0  # Number of previous observations and previous actions to add to the current observation
+        self.stacked_observations = (
+            0  # Number of previous observations and previous actions to add to the current observation
+        )
 
         # Evaluate
         self.muzero_player = 0  # Turn Muzero begins to play (0: MuZero plays first, 1: MuZero plays second)
         self.opponent = None  # Hard coded agent that MuZero faces to assess his progress in multiplayer games. It doesn't influence training. None, "random" or "expert" if implemented in the Game class
-
-
 
         ### Self-Play
         self.num_workers = 40  # Number of simultaneous threads/workers self-playing to feed the replay buffer
@@ -63,8 +65,6 @@ class MuZeroConfig:
         self.pb_c_base = 19652
         self.pb_c_init = 1.25
 
-
-
         ### Network
         self.network = "resnet"  # "resnet" / "fullyconnected"
         self.support_size = 300  # Value and reward are scaled (with almost sqrt) and encoded on a vector with a range of -support_size to support_size. Choose it so that support_size <= sqrt(max(abs(discounted reward)))
@@ -78,7 +78,10 @@ class MuZeroConfig:
         self.reduced_channels_policy = 256  # Number of channels in policy head
         self.resnet_fc_reward_layers = [256, 256]  # Define the hidden layers in the reward head of the dynamic network
         self.resnet_fc_value_layers = [256, 256]  # Define the hidden layers in the value head of the prediction network
-        self.resnet_fc_policy_layers = [256, 256]  # Define the hidden layers in the policy head of the prediction network
+        self.resnet_fc_policy_layers = [
+            256,
+            256,
+        ]  # Define the hidden layers in the policy head of the prediction network
 
         # Fully Connected Network
         self.encoding_size = 10
@@ -88,16 +91,19 @@ class MuZeroConfig:
         self.fc_value_layers = []  # Define the hidden layers in the value network
         self.fc_policy_layers = []  # Define the hidden layers in the policy network
 
-
-
         ### Training
-        self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "/checkpoints", os.path.basename(__file__)[:-3], datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))  # Path to store the model weights and TensorBoard logs
+        self.results_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "/checkpoints",
+            os.path.basename(__file__)[:-3],
+            datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"),
+        )  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
         self.training_steps = int(1000e3)  # Total number of training steps (ie weights update according to a batch)
         self.batch_size = 128  # Number of parts of games to train on at each training step
         self.checkpoint_interval = int(1e3)  # Number of training steps before using the model for self-playing
         self.value_loss_weight = 0.25  # Scale the value loss to avoid overfitting of the value function, paper recommends 0.25 (See paper appendix Reanalyze)
-        self.train_on_gpu = True #torch.cuda.is_available()  # Train on GPU if available
+        self.train_on_gpu = True  # torch.cuda.is_available()  # Train on GPU if available
 
         self.optimizer = "Adam"  # "Adam" or "SGD". Paper uses SGD
         self.weight_decay = 1e-4  # L2 weights regularization
@@ -108,26 +114,23 @@ class MuZeroConfig:
         self.lr_decay_rate = 0.1  # Set it to 1 to use a constant learning rate
         self.lr_decay_steps = 350e3
 
-
-
         ### Replay Buffer
-        self.replay_buffer_size = 1e6 # Number of self-play games to keep in the replay buffer
+        self.replay_buffer_size = 1e6  # Number of self-play games to keep in the replay buffer
         self.num_unroll_steps = 5  # Number of game moves to keep for every batch element
         self.td_steps = 10  # Number of steps in the future to take into account for calculating the target value
         self.PER = True  # Prioritized Replay (See paper appendix Training), select in priority the elements in the replay buffer which are unexpected for the network
         self.PER_alpha = 1  # How much prioritization is used, 0 corresponding to the uniform case, paper suggests 1
 
         # Reanalyze (See paper appendix Reanalyse)
-        self.use_last_model_value = True  # Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
+        self.use_last_model_value = (
+            True  # Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
+        )
         self.reanalyse_on_gpu = False
-
-
 
         ### Adjust the self play / training ratio to avoid over/underfitting
         self.self_play_delay = 0  # Number of seconds to wait after each played game
         self.training_delay = 0  # Number of seconds to wait after each training step
         self.ratio = None  # Desired training steps per self played step ratio. Equivalent to a synchronous version, training can take much longer. Set it to None to disable it
-
 
     def visit_softmax_temperature_fn(self, trained_steps):
         """
@@ -159,10 +162,10 @@ class Game(AbstractGame):
     @staticmethod
     def _create_env(seed, output_queue, input_queue, env=None):
         if env is None:
-            env = gym.make('NetHackChallenge-v0')
-        env = EnvWrapper(env,
-                         agent_args=dict(rl_model_to_train='fight2',
-                                         rl_model_training_comm=(output_queue, input_queue)))
+            env = gym.make("NetHackChallenge-v0")
+        env = EnvWrapper(
+            env, agent_args=dict(rl_model_to_train="fight2", rl_model_training_comm=(output_queue, input_queue))
+        )
         if seed is not None:
             env.env.seed(seed, seed)
         return env
@@ -171,6 +174,7 @@ class Game(AbstractGame):
         output_queue, input_queue = multiprocessing.Queue(), multiprocessing.Queue()
         self.output_queue = output_queue
         self.input_queue = input_queue
+
         def f():
             try:
                 env = Game._create_env(None, output_queue, input_queue)
@@ -185,18 +189,17 @@ class Game(AbstractGame):
         self.rl_model = self.output_queue.get()
 
     def _kill_thread(self):
-        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(self.thread.ident,
-              ctypes.py_object(KeyboardInterrupt))
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(self.thread.ident, ctypes.py_object(KeyboardInterrupt))
         if res > 1:
             ctypes.pythonapi.PyThreadState_SetAsyncExc(self.thread.ident, 0)
-            raise RuntimeError('Exception raise failure')
+            raise RuntimeError("Exception raise failure")
         self.thread.terminate()
         self.thread.join()
 
     def step(self, action):
         """
         Apply action to the game.
-        
+
         Args:
             action : action of the action_space to take.
 
@@ -220,9 +223,9 @@ class Game(AbstractGame):
         """
         Should return the legal actions at each turn, if it is not available, it can return
         the whole action space. At each turn, the game have to be able to handle one of returned actions.
-        
+
         For complex game where calculating legal moves is too long, the idea is to define the legal actions
-        equal to the action space but to return a negative reward if the action is illegal.        
+        equal to the action space but to return a negative reward if the action is illegal.
 
         Returns:
             An array of integers, subset of the action space.
@@ -232,7 +235,7 @@ class Game(AbstractGame):
     def reset(self):
         """
         Reset the game for a new game.
-        
+
         Returns:
             Initial observation of the game.
         """
