@@ -23,6 +23,7 @@ def worker(args):
     for i in range(from_, to_):
         env = EnvWrapper(NLEDemo(orig_env, flags.gamesavedir))
         try:
+            env.seed(i)
             env.main()
         except BaseException as e:
             print(

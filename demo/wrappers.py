@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import gym
+import numpy as np
 from gym import spaces
 from nle import nethack as nh
 
@@ -67,6 +68,7 @@ class NLEDemo(gym.Wrapper):
         self.done = [False]
         self.info = [None]
         self.steps_in_the_past = 0
+        self.seeds = self.env.get_seeds()
         return obs
 
     def save_to_file(self):
@@ -75,11 +77,12 @@ class NLEDemo(gym.Wrapper):
             "checkpoints": self.checkpoints,
             "checkpoint_action_nr": self.checkpoint_action_nr,
             "rewards": self.rewards,
+            "seeds": self.seeds,
         }
         with open(self.savedir / "game.demo", "wb") as f:
             pickle.dump(dat, f)
 
-    def load_from_file(self, file_name):
+    def load_from_file(self, file_name, demostep=-1):
         self.reset()
         with open(file_name, "rb") as f:
             dat = pickle.load(f)
@@ -87,7 +90,8 @@ class NLEDemo(gym.Wrapper):
         self.checkpoints = dat["checkpoints"]
         self.checkpoint_action_nr = dat["checkpoint_action_nr"]
         self.rewards = dat["rewards"]
-        self.load_state_and_walk_forward()
+        self.seeds = dat["seeds"]
+        self.load_state_and_walk_forward(demostep=demostep)
 
     def save_checkpoint(self):
         i = len(self.actions)
@@ -105,17 +109,34 @@ class NLEDemo(gym.Wrapper):
         self.load_state_and_walk_forward()
         self.steps_in_the_past = 0
 
-    def load_state_and_walk_forward(self):
+    def load_state_and_walk_forward(self, demostep=-1):
+        self.env.seed(*self.seeds)
         if len(self.checkpoints) == 0:
             self.env.reset()
             time_step = 0
         else:
-            self.env.unwrapped.restore_state(self.checkpoints[-1])
-            time_step = self.checkpoint_action_nr[-1]
+            if demostep != -1:
+                idx = np.where(np.array(self.checkpoint_action_nr) <= demostep)[0][-1]
+            else:
+                idx = -1
+            self.env.unwrapped.load(self.checkpoints[idx])
 
-        for a in self.actions[time_step:]:
-            action = self.env.unwrapped._action_set[a]
-            self.env.unwrapped.ale.act(action)
+            # print(self.env.get_seeds())
+            # import nle
+            # obs = self.env.last_observation
+            # tty_chars_idx = self.env._observation_keys.index("tty_chars")
+            # tty_colors_idx = self.env._observation_keys.index("tty_colors")
+            # tty_cursor_idx = self.env._observation_keys.index("tty_cursor")
+            # print(
+            #     nle.nethack.tty_render(
+            #         obs[tty_chars_idx], obs[tty_colors_idx], obs[tty_cursor_idx]
+            #     )
+            # )
+
+            time_step = self.checkpoint_action_nr[idx]
+
+        for action in self.actions[time_step:demostep]:
+            self.env.step(action)
 
 
 class AgentStepTimeout(KeyboardInterrupt):
