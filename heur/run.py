@@ -1,5 +1,10 @@
+import argparse
+import ast
 import contextlib
 import ctypes
+import os
+import random
+import string
 import sys
 import threading
 import time
@@ -12,6 +17,16 @@ from nle import nethack as nh
 
 from heur.agent import Agent
 from heur.character import Character
+
+
+def generate_random_string(length=15):
+    # Define the character set
+    characters = string.ascii_letters + string.digits
+
+    # Generate the random string
+    random_string = "".join(random.choice(characters) for _ in range(length))
+
+    return random_string
 
 
 class AgentStepTimeout(KeyboardInterrupt):
@@ -74,12 +89,12 @@ class EnvWrapper:
                 assert out == 1, out
                 break
 
-    def main(self):
+    def main(self, save_sokoban=False):
         timer_thread = threading.Thread(target=self._timer_thread)
         timer_thread.start()
         try:
             self.reset()
-            self.agent = Agent(self, panic_on_errors=True)
+            self.agent = Agent(self, panic_on_errors=True, save_sokoban=save_sokoban)
             self.agent.main()
         finally:
             self._finished = True
@@ -87,16 +102,27 @@ class EnvWrapper:
 
 
 def worker(args):
-    from_, to_, savedir = args
-    orig_env = gym.make("NetHackChallenge-v0", save_ttyrec_every=1, savedir=savedir)
+    from_, to_, flags = args
+
+    gamesavedir = os.path.join(flags.gamesavedir, f"sokoban_{generate_random_string()}")
+    orig_env = gym.make(
+        flags.game,
+        save_ttyrec_every=1,
+        savedir=flags.savedir,
+        gamesavedir=gamesavedir,
+    )
 
     scores = []
     for i in range(from_, to_):
+        orig_env.seed(i)
         env = EnvWrapper(orig_env)
         try:
-            env.main()
+            env.main(save_sokoban=flags.save_sokoban)
         except BaseException as e:
-            print("".join(traceback.format_exception(None, e, e.__traceback__)), file=sys.stderr)
+            print(
+                "".join(traceback.format_exception(None, e, e.__traceback__)),
+                file=sys.stderr,
+            )
 
         print(f"Run {i} finished with score {env.score}", file=sys.stderr)
 
@@ -106,18 +132,28 @@ def worker(args):
 
 
 if __name__ == "__main__":
-    NUM_ASSESSMENTS = int(sys.argv[1])
-    NUM_THREADS = int(sys.argv[2])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num_threads", type=int)
+    parser.add_argument("--num_assessments", type=int)
+    parser.add_argument("--savedir", type=str)
+    parser.add_argument("--game", type=str)
+    parser.add_argument("--gamesavedir", type=str)
+    parser.add_argument("--save_sokoban", type=ast.literal_eval, default=False)
+    flags = parser.parse_args()
 
     start_time = time.time()
 
-    with Pool(NUM_THREADS) as pool:
+    with Pool(flags.num_threads) as pool:
         scores = list(
             pool.map(
                 worker,
                 [
-                    (i * NUM_ASSESSMENTS // NUM_THREADS, (i + 1) * NUM_ASSESSMENTS // NUM_THREADS, sys.argv[3])
-                    for i in range(NUM_THREADS)
+                    (
+                        i * flags.num_assessments // flags.num_threads,
+                        (i + 1) * flags.num_assessments // flags.num_threads,
+                        flags,
+                    )
+                    for i in range(flags.num_threads)
                 ],
             )
         )
