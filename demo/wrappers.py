@@ -28,24 +28,13 @@ class NLEDemo(gym.Wrapper):
         self.savedir = Path(gamesavedir) / Path(self.env.nethack._ttyrec).stem
 
     def step(self, action):
-        if self.steps_in_the_past > 0:
-            self.restore_past_state()
+        obs, reward, done, info = self.env.step(action)
 
-        if len(self.done) > 0 and self.done[-1]:
-            obs = self.obs[-1]
-            reward = 0
-            done = True
-            info = None
-
-        else:
-            obs, reward, done, info = self.env.step(action)
-            # self.env.render("human")
-
-            self.actions.append(action)
-            self.obs.append(obs)
-            self.rewards.append(reward)
-            self.done.append(done)
-            self.info.append(info)
+        self.actions.append(action)
+        self.obs.append(obs)
+        self.rewards.append(reward)
+        self.done.append(done)
+        self.info.append(info)
 
         # periodic checkpoint saving
         if not done:
@@ -83,60 +72,36 @@ class NLEDemo(gym.Wrapper):
             pickle.dump(dat, f)
 
     def load_from_file(self, file_name, demostep=-1):
-        self.reset()
         with open(file_name, "rb") as f:
             dat = pickle.load(f)
-        self.actions = dat["actions"]
-        self.checkpoints = dat["checkpoints"]
-        self.checkpoint_action_nr = dat["checkpoint_action_nr"]
-        self.rewards = dat["rewards"]
-        self.seeds = dat["seeds"]
-        self.load_state_and_walk_forward(demostep=demostep)
+        actions = dat["actions"]
+        checkpoints = dat["checkpoints"]
+        checkpoint_action_nr = dat["checkpoint_action_nr"]
+        rewards = dat["rewards"]
+        seeds = dat["seeds"]
+        self.env.seed(*seeds)
+        self.reset()
+
+        if len(checkpoints) == 0:
+            time_step = 0
+        else:
+            if demostep != -1:
+                idx = np.where(np.array(checkpoint_action_nr) <= demostep)[0][-1]
+            else:
+                idx = -1
+
+            self.env.unwrapped.load(checkpoints[idx])
+            time_step = checkpoint_action_nr[idx]
+
+        for action in actions[time_step:demostep]:
+            self.step(action)
 
     def save_checkpoint(self):
         i = len(self.actions)
-
         chk_pth = self.savedir / f"ckpt_{i}"
         self.env.save(gamesavedir=chk_pth)
         self.checkpoints.append(chk_pth)
         self.checkpoint_action_nr.append(len(self.actions))
-
-    def restore_past_state(self):
-        self.actions = self.actions[: -self.steps_in_the_past]
-        while len(self.checkpoints) > 0 and self.checkpoint_action_nr[-1] > len(self.actions):
-            self.checkpoints.pop()
-            self.checkpoint_action_nr.pop()
-        self.load_state_and_walk_forward()
-        self.steps_in_the_past = 0
-
-    def load_state_and_walk_forward(self, demostep=-1):
-        self.env.seed(*self.seeds)
-        if len(self.checkpoints) == 0:
-            self.env.reset()
-            time_step = 0
-        else:
-            if demostep != -1:
-                idx = np.where(np.array(self.checkpoint_action_nr) <= demostep)[0][-1]
-            else:
-                idx = -1
-            self.env.unwrapped.load(self.checkpoints[idx])
-
-            # print(self.env.get_seeds())
-            # import nle
-            # obs = self.env.last_observation
-            # tty_chars_idx = self.env._observation_keys.index("tty_chars")
-            # tty_colors_idx = self.env._observation_keys.index("tty_colors")
-            # tty_cursor_idx = self.env._observation_keys.index("tty_cursor")
-            # print(
-            #     nle.nethack.tty_render(
-            #         obs[tty_chars_idx], obs[tty_colors_idx], obs[tty_cursor_idx]
-            #     )
-            # )
-
-            time_step = self.checkpoint_action_nr[idx]
-
-        for action in self.actions[time_step:demostep]:
-            self.env.step(action)
 
 
 class AgentStepTimeout(KeyboardInterrupt):
