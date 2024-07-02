@@ -60,11 +60,7 @@ def play():
         savedir=FLAGS.savedir,
     )
 
-    if FLAGS.seeds is not None:
-        orig_env.seed(FLAGS.seeds)
-
     env = NLEDemo(orig_env, FLAGS.demodir)
-    obs = env.reset()
 
     if FLAGS.demopath:
         env.load_from_file(FLAGS.demopath, FLAGS.demostep)
@@ -162,11 +158,6 @@ def main():
         help="Number of maximum steps per episode.",
     )
     parser.add_argument(
-        "--seeds",
-        default=None,
-        help="Seeds to send to NetHack. Can be a dict or int. " "Defaults to None (no seeding).",
-    )
-    parser.add_argument(
         "--savedir",
         default="nle_data/play_data",
         type=str,
@@ -215,10 +206,6 @@ def main():
         cm = dummy_context
 
     with cm():
-        if FLAGS.seeds is not None:
-            # to handle both int and dicts
-            FLAGS.seeds = ast.literal_eval(FLAGS.seeds)
-
         if FLAGS.savedir == "args":
             FLAGS.savedir = "{}_{}_{}.zip".format(time.strftime("%Y%m%d-%H%M%S"), FLAGS.mode, FLAGS.env)
         elif FLAGS.savedir == "None":
