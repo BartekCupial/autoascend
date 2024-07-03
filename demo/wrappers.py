@@ -12,7 +12,6 @@ from gym import spaces
 from nle import nethack as nh
 
 from heur.agent import Agent
-from heur.character import Character
 
 
 class NLEDemo(gym.Wrapper):
@@ -77,7 +76,6 @@ class NLEDemo(gym.Wrapper):
         actions = dat["actions"]
         checkpoints = dat["checkpoints"]
         checkpoint_action_nr = dat["checkpoint_action_nr"]
-        rewards = dat["rewards"]
         seeds = dat["seeds"]
         self.env.seed(*seeds)
         self.reset()
@@ -85,13 +83,18 @@ class NLEDemo(gym.Wrapper):
         if len(checkpoints) == 0:
             time_step = 0
         else:
-            if demostep != -1:
+            if 100 >= demostep >= 0:
+                time_step = 0
+            elif demostep >= 100:
                 idx = np.where(np.array(checkpoint_action_nr) <= demostep)[0][-1]
-            else:
+                self.env.unwrapped.load(checkpoints[idx])
+                time_step = checkpoint_action_nr[idx]
+            elif demostep == -1:
                 idx = -1
-
-            self.env.unwrapped.load(checkpoints[idx])
-            time_step = checkpoint_action_nr[idx]
+                self.env.unwrapped.load(checkpoints[idx])
+                time_step = checkpoint_action_nr[idx]
+            else:
+                raise ValueError
 
         for action in actions[time_step:demostep]:
             self.step(action)
