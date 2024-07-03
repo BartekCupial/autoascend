@@ -21,7 +21,6 @@ class NLEDemo(gym.Wrapper):
 
     def __init__(self, env, gamesavedir):
         super().__init__(env)
-        self.action_space = spaces.Discrete(env.unwrapped.action_space.n + 1)  # add "time travel" action
         self.save_every_k = 100
         self.gamesavedir = gamesavedir
         self.savedir = Path(gamesavedir) / Path(self.env.nethack._ttyrec).stem
@@ -30,10 +29,7 @@ class NLEDemo(gym.Wrapper):
         obs, reward, done, info = self.env.step(action)
 
         self.actions.append(action)
-        self.obs.append(obs)
         self.rewards.append(reward)
-        self.done.append(done)
-        self.info.append(info)
 
         # periodic checkpoint saving
         if not done:
@@ -47,15 +43,10 @@ class NLEDemo(gym.Wrapper):
 
     def reset(self):
         obs = self.env.reset()
-        # self.env.render("human")
         self.actions = []
         self.checkpoints = []
         self.checkpoint_action_nr = []
-        self.obs = [obs]
         self.rewards = []
-        self.done = [False]
-        self.info = [None]
-        self.steps_in_the_past = 0
         self.seeds = self.env.get_seeds()
         return obs
 
@@ -73,31 +64,44 @@ class NLEDemo(gym.Wrapper):
     def load_from_file(self, file_name, demostep=-1):
         with open(file_name, "rb") as f:
             dat = pickle.load(f)
-        actions = dat["actions"]
-        checkpoints = dat["checkpoints"]
-        checkpoint_action_nr = dat["checkpoint_action_nr"]
-        seeds = dat["seeds"]
-        self.env.seed(*seeds)
+        self.actions = dat["actions"]
+        self.checkpoints = dat["checkpoints"]
+        self.checkpoint_action_nr = dat["checkpoint_action_nr"]
+        self.rewards = dat["rewards"]
+        self.seeds = dat["seeds"]
+        self.env.seed(*self.seeds)
         self.reset()
 
-        if len(checkpoints) == 0:
+        if len(self.checkpoints) == 0:
             time_step = 0
         else:
             if 100 >= demostep >= 0:
                 time_step = 0
             elif demostep >= 100:
-                idx = np.where(np.array(checkpoint_action_nr) <= demostep)[0][-1]
-                self.env.unwrapped.load(checkpoints[idx])
-                time_step = checkpoint_action_nr[idx]
+                idx = np.where(np.array(self.checkpoint_action_nr) <= demostep)[0][-1]
+                obs = self.env.unwrapped.load(self.checkpoints[idx])
+                time_step = self.checkpoint_action_nr[idx]
             elif demostep == -1:
                 idx = -1
-                self.env.unwrapped.load(checkpoints[idx])
-                time_step = checkpoint_action_nr[idx]
+                obs = self.env.unwrapped.load(self.checkpoints[idx])
+                time_step = self.checkpoint_action_nr[idx]
             else:
                 raise ValueError
 
-        for action in actions[time_step:demostep]:
-            self.step(action)
+        # IMPORTANT, to have reproducible trajectories we need to save checkpoints
+        # e.g. if the trajectory was generated with saves every 100 actions
+        # to reproduce it from saved action list we also need to save the game every 100 actions
+        # this is because state of random generator changes when saving.
+        # The issue would manifest itself e.g. with self.actions[time_step:] instead of self.actions[time_step:demostep]
+        # TODO: maybe we can save the game differently idk. (We would have to create different C function for saving)
+        for action in self.actions[time_step:demostep]:
+            obs, _, done, _ = self.env.step(action)
+
+            # TODO: we don't have any guarantees that dones won't happen, e.g. above issue
+            # this would indicate issues with saving etc...
+            assert not done, "issue with saving/loading happened..."
+
+        return obs
 
     def save_checkpoint(self):
         i = len(self.actions)
