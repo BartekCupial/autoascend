@@ -63,7 +63,9 @@ def play():
     env = NLEDemo(orig_env, FLAGS.demodir)
 
     if FLAGS.demopath:
-        env.load_from_file(FLAGS.demopath, FLAGS.demostep)
+        obs = env.load_from_file(FLAGS.demopath, FLAGS.demostep)
+    else:
+        obs = env.reset()
 
     steps = 0
     episodes = 0
