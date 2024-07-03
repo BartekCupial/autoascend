@@ -28,22 +28,22 @@ class NLEDemo(gym.Wrapper):
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
 
-        self.actions.append(action)
+        self.recorded_actions.append(action)
         self.rewards.append(reward)
 
         # periodic checkpoint saving
         if not done:
             if (
                 len(self.checkpoint_action_nr) > 0
-                and len(self.actions) >= self.checkpoint_action_nr[-1] + self.save_every_k
-            ) or (len(self.checkpoint_action_nr) == 0 and len(self.actions) >= self.save_every_k):
+                and len(self.recorded_actions) >= self.checkpoint_action_nr[-1] + self.save_every_k
+            ) or (len(self.checkpoint_action_nr) == 0 and len(self.recorded_actions) >= self.save_every_k):
                 self.save_checkpoint()
 
         return obs, reward, done, info
 
     def reset(self):
         obs = self.env.reset()
-        self.actions = []
+        self.recorded_actions = []
         self.checkpoints = []
         self.checkpoint_action_nr = []
         self.rewards = []
@@ -52,7 +52,7 @@ class NLEDemo(gym.Wrapper):
 
     def save_to_file(self):
         dat = {
-            "actions": self.actions,
+            "actions": self.recorded_actions,
             "checkpoints": self.checkpoints,
             "checkpoint_action_nr": self.checkpoint_action_nr,
             "rewards": self.rewards,
@@ -64,13 +64,13 @@ class NLEDemo(gym.Wrapper):
     def load_from_file(self, file_name, demostep=-1):
         with open(file_name, "rb") as f:
             dat = pickle.load(f)
-        self.actions = dat["actions"]
+        self.recorded_actions = dat["actions"]
         self.checkpoints = dat["checkpoints"]
         self.checkpoint_action_nr = dat["checkpoint_action_nr"]
         self.rewards = dat["rewards"]
         self.seeds = dat["seeds"]
         self.env.seed(*self.seeds)
-        self.reset()
+        obs = self.env.reset()
 
         if len(self.checkpoints) == 0:
             time_step = 0
@@ -92,9 +92,9 @@ class NLEDemo(gym.Wrapper):
         # e.g. if the trajectory was generated with saves every 100 actions
         # to reproduce it from saved action list we also need to save the game every 100 actions
         # this is because state of random generator changes when saving.
-        # The issue would manifest itself e.g. with self.actions[time_step:] instead of self.actions[time_step:demostep]
+        # The issue would manifest itself e.g. with self.recorded_actions[time_step:] instead of self.recorded_actions[time_step:demostep]
         # TODO: maybe we can save the game differently idk. (We would have to create different C function for saving)
-        for action in self.actions[time_step:demostep]:
+        for action in self.recorded_actions[time_step:demostep]:
             obs, _, done, _ = self.env.step(action)
 
             # TODO: we don't have any guarantees that dones won't happen, e.g. above issue
@@ -104,11 +104,11 @@ class NLEDemo(gym.Wrapper):
         return obs
 
     def save_checkpoint(self):
-        i = len(self.actions)
+        i = len(self.recorded_actions)
         chk_pth = self.savedir / f"ckpt_{i}"
         self.env.save(gamesavedir=chk_pth)
         self.checkpoints.append(chk_pth)
-        self.checkpoint_action_nr.append(len(self.actions))
+        self.checkpoint_action_nr.append(len(self.recorded_actions))
 
 
 class AgentStepTimeout(KeyboardInterrupt):

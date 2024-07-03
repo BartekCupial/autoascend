@@ -32,6 +32,10 @@ def no_echo():
         termios.tcsetattr(0, termios.TCSAFLUSH, tt)
 
 
+def go_back(num_lines):
+    print("\033[%dA" % num_lines)
+
+
 def get_action(env):
     if FLAGS.mode == "random":
         action = env.action_space.sample()
@@ -47,8 +51,7 @@ def get_action(env):
                 break
             except ValueError:
                 print(("Selected action '%s' is not in action list. Please try again.") % chr(ch))
-                if not FLAGS.print_frames_separately:
-                    print("\033[2A")  # Go up 2 lines.
+                print("\033[2A")  # Go up 2 lines.
                 continue
     return action
 
@@ -79,10 +82,16 @@ def play():
     start_time = total_start_time
 
     while True:
-        if not FLAGS.no_render:
-            env.render("human")
+        print("-" * 8 + " " * 71)
+        print(f"Previous reward: {str(reward):64s}")
+        act_str = repr(env.actions[action]) if action is not None else ""
+        print(f"Previous action: {str(act_str):64s}")
+        print("-" * 8)
+        env.render(FLAGS.render_mode)
+        print("-" * 8)
+        print(obs["blstats"])
+        go_back(num_lines=33)
 
-        break
         action = get_action(env)
 
         if action is None:
