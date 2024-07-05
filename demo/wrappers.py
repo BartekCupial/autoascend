@@ -69,7 +69,7 @@ class NLEDemo(gym.Wrapper):
         self.checkpoint_action_nr = dat["checkpoint_action_nr"]
         self.rewards = dat["rewards"]
         self.seeds = dat["seeds"]
-        self.env.seed(*self.seeds)
+        self.env.unwrapped.seed(*self.seeds)
         obs = self.env.reset()
 
         if len(self.checkpoints) == 0:

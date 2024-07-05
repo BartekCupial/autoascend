@@ -17,6 +17,7 @@ from nle import nethack as nh
 
 from heur.agent import Agent
 from heur.character import Character
+from heur.task_rewards_info import TaskRewardsInfoWrapper
 
 
 def generate_random_string(length=15):
