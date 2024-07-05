@@ -40,6 +40,7 @@ class Agent:
         panic_on_errors=False,
         rl_model_to_train=None,
         rl_model_training_comm=(None, None),
+        save_sokoban=False,
     ):
         self.env = env
         self.verbose = verbose
@@ -48,6 +49,7 @@ class Agent:
         self.all_panics = []
         self.rl_model_to_train = rl_model_to_train
         self.rl_model_training_comm = rl_model_training_comm
+        self.save_sokoban = save_sokoban
 
         self.on_update = []
         self.levels = {}

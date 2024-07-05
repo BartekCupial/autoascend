@@ -1,3 +1,4 @@
+import os
 from enum import IntEnum, auto
 
 import nle.nethack as nh
@@ -619,6 +620,13 @@ class GlobalLogic:
 
             elif self.milestone == Milestone.SOLVE_SOKOBAN:
                 # TODO: fix the condition, monster can destroy doors
+                if self.agent.save_sokoban:
+                    savepath = self.agent.env.env.nethack.gamesavedir
+                    os.makedirs(savepath, exist_ok=True)
+                    self.agent.env.env.save()
+                    import sys
+                    sys.exit(0)
+
                 condition = (
                     lambda: self.agent.current_level().key() == (Level.SOKOBAN, 1)
                     and not utils.isin(self.agent.current_level().objects, G.DOOR_CLOSED).any()
