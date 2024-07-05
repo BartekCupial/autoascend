@@ -15,6 +15,7 @@ import nle  # noqa: F401
 from nle import nethack
 
 from demo.wrappers import EnvWrapper, NLEDemo
+from heur.task_rewards_info import TaskRewardsInfoWrapper
 
 
 @contextlib.contextmanager
@@ -57,10 +58,12 @@ def get_action(env):
 
 
 def play():
-    orig_env = gym.make(
-        FLAGS.env,
-        save_ttyrec_every=1,
-        savedir=FLAGS.savedir,
+    orig_env = TaskRewardsInfoWrapper(
+        gym.make(
+            FLAGS.env,
+            save_ttyrec_every=1,
+            savedir=FLAGS.savedir,
+        )
     )
 
     env = NLEDemo(orig_env, FLAGS.demodir)
