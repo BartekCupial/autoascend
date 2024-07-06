@@ -3,6 +3,7 @@ import ast
 import contextlib
 import ctypes
 import os
+import pickle
 import random
 import string
 import sys
@@ -106,14 +107,17 @@ def worker(args):
     from_, to_, flags = args
 
     gamesavedir = os.path.join(flags.gamesavedir, f"sokoban_{generate_random_string()}")
-    orig_env = gym.make(
-        flags.game,
-        save_ttyrec_every=1,
-        savedir=flags.savedir,
-        gamesavedir=gamesavedir,
+    orig_env = TaskRewardsInfoWrapper(
+        gym.make(
+            flags.game,
+            save_ttyrec_every=1,
+            savedir=flags.savedir,
+            # gamesavedir=gamesavedir,
+        )
     )
 
     scores = []
+    extra_stats = []
     for i in range(from_, to_):
         orig_env.seed(i)
         env = EnvWrapper(orig_env)
@@ -128,6 +132,11 @@ def worker(args):
         print(f"Run {i} finished with score {env.score}", file=sys.stderr)
 
         scores.append(env.score)
+        extra_stats.append(env.env.last_info)
+
+    with open(f"data_{from_}.pkl", "w+") as f:
+        pickle.dump(extra_stats, f)
+
     orig_env.close()
     return scores
 
