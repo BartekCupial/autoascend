@@ -134,7 +134,7 @@ def worker(args):
         scores.append(env.score)
         extra_stats.append(env.env.last_info)
 
-    with open(f"data_{from_}.pkl", "w+") as f:
+    with open(f"data_{from_}.pkl", "w") as f:
         pickle.dump(extra_stats, f)
 
     orig_env.close()
