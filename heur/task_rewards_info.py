@@ -49,6 +49,8 @@ class TaskRewardsInfoWrapper(gym.Wrapper):
         for task in self.tasks:
             task.reward(self.env.unwrapped, last_observation, observation, end_status)
 
+        self.last_info = info
+
         return obs, reward, done, info
 
     def add_more_stats(self, info):
