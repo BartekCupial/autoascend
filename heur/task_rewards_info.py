@@ -7,6 +7,7 @@ from heur.task_rewards import (
     SokobanfillpitScore,
     SokobanReachedScore,
     SokobansolvedlevelsScore,
+    SokobanSolvedScore,
     StaircasePetScore,
     StaircaseScore,
 )
@@ -23,6 +24,7 @@ class TaskRewardsInfoWrapper(gym.Wrapper):
             SokobanfillpitScore(),
             SokobansolvedlevelsScore(),
             SokobanReachedScore(),
+            SokobanSolvedScore(),
             StaircasePetScore(),
             StaircaseScore(),
         ]

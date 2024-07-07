@@ -3,7 +3,7 @@ import re
 import numpy as np
 from nle import nethack
 
-from heur.glyph import SS
+from heur.glyph import SS, G
 
 
 class Score:
@@ -193,6 +193,26 @@ class SokobanReachedScore(Score):
         for reached in self.reached_levels.keys():
             if reached in [(4, 4), (4, 3), (4, 2), (4, 1)]:
                 self.score += 1
+
+    def reset_score(self):
+        super().reset_score()
+        self.sokoban_levels = {}
+
+
+class SokobanSolvedScore(Score):
+    def __init__(self):
+        super().__init__()
+        self.reached_levels = {}
+
+    def reward(self, env, last_observation, observation, end_status):
+        glyphs = observation[env._glyph_index]
+        blstats = observation[env._blstats_index]
+
+        dungeon_num = blstats[nethack.NLE_BL_DNUM]
+        dungeon_level = blstats[nethack.NLE_BL_DLEVEL]
+
+        if (dungeon_num, dungeon_level) == (4, 1) and np.isin(glyphs, [G.DOOR_CLOSED]).sum() == 0:
+            self.score = 1
 
     def reset_score(self):
         super().reset_score()
