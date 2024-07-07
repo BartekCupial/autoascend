@@ -2,9 +2,6 @@ import argparse
 import ast
 import contextlib
 import ctypes
-import os
-import random
-import string
 import sys
 import threading
 import time
@@ -18,16 +15,6 @@ from nle import nethack as nh
 from heur.agent import Agent
 from heur.character import Character
 from heur.task_rewards_info import TaskRewardsInfoWrapper
-
-
-def generate_random_string(length=15):
-    # Define the character set
-    characters = string.ascii_letters + string.digits
-
-    # Generate the random string
-    random_string = "".join(random.choice(characters) for _ in range(length))
-
-    return random_string
 
 
 class AgentStepTimeout(KeyboardInterrupt):
@@ -90,12 +77,12 @@ class EnvWrapper:
                 assert out == 1, out
                 break
 
-    def main(self, save_sokoban=False):
+    def main(self, save_sokoban=False, gamesavedir=None):
         timer_thread = threading.Thread(target=self._timer_thread)
         timer_thread.start()
         try:
             self.reset()
-            self.agent = Agent(self, panic_on_errors=True, save_sokoban=save_sokoban)
+            self.agent = Agent(self, panic_on_errors=True, save_sokoban=save_sokoban, gamesavedir=gamesavedir)
             self.agent.main()
         finally:
             self._finished = True
@@ -105,12 +92,10 @@ class EnvWrapper:
 def worker(args):
     from_, to_, flags = args
 
-    gamesavedir = os.path.join(flags.gamesavedir, f"sokoban_{generate_random_string()}")
     orig_env = gym.make(
         flags.game,
         save_ttyrec_every=1,
         savedir=flags.savedir,
-        gamesavedir=gamesavedir,
     )
 
     scores = []
@@ -118,7 +103,7 @@ def worker(args):
         orig_env.seed(i)
         env = EnvWrapper(orig_env)
         try:
-            env.main(save_sokoban=flags.save_sokoban)
+            env.main(save_sokoban=flags.save_sokoban, gamesavedir=flags.gamesavedir)
         except BaseException as e:
             print(
                 "".join(traceback.format_exception(None, e, e.__traceback__)),

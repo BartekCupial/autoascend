@@ -1,4 +1,6 @@
 import os
+import random
+import string
 from enum import IntEnum, auto
 
 import nle.nethack as nh
@@ -14,6 +16,21 @@ from heur.glyph import MON, G, Hunger
 from heur.item import Item, ItemPriorityBase, flatten_items
 from heur.level import Level
 from heur.strategy import Strategy
+
+
+def generate_random_string(length=15):
+    # Define the character set
+    characters = string.ascii_letters + string.digits
+
+    # Generate the random string
+    random_string = "".join(random.choice(characters) for _ in range(length))
+
+    return random_string
+
+
+class SokobanSave(KeyboardInterrupt):
+    # it inheirits from KeyboardInterrupt because agent never catches it
+    pass
 
 
 class ItemPriority(ItemPriorityBase):
@@ -621,11 +638,10 @@ class GlobalLogic:
             elif self.milestone == Milestone.SOLVE_SOKOBAN:
                 # TODO: fix the condition, monster can destroy doors
                 if self.agent.save_sokoban:
-                    savepath = self.agent.env.env.nethack.gamesavedir
+                    savepath = os.path.join(self.agent.gamesavedir, f"sokoban_{generate_random_string()}")
                     os.makedirs(savepath, exist_ok=True)
-                    self.agent.env.env.save()
-                    import sys
-                    sys.exit(0)
+                    self.agent.env.env.save(savepath)
+                    raise SokobanSave
 
                 condition = (
                     lambda: self.agent.current_level().key() == (Level.SOKOBAN, 1)
