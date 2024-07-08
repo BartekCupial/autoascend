@@ -8,7 +8,7 @@ from multiprocessing import Pool
 import gym
 import numpy as np
 
-from demo.wrappers import EnvWrapper, NLEDemo
+from demo.wrappers import EnvWrapper, NLEDemo, RenderTiles
 
 
 def worker(args):
@@ -18,6 +18,7 @@ def worker(args):
         save_ttyrec_every=1,
         savedir=flags.savedir,
     )
+    orig_env = RenderTiles(orig_env, tileset_path="tilesets/3.6.1tiles32.png")
 
     scores = []
     for i in range(from_, to_):
