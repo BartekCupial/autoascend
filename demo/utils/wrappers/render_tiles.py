@@ -3,11 +3,13 @@ import re
 import cv2
 import gym
 import numpy as np
+import pandas as pd
 from nle import nethack
 from numba import njit
 from PIL import Image, ImageDraw, ImageFont
 
 from demo.utils.blstats import BLStats
+from demo.utils.item import ItemClasses
 from demo.utils.level import Level
 
 HISTORY_SIZE = 13
@@ -116,14 +118,42 @@ def _draw_grid(imgs, ncol):
     return np.concatenate(rows, axis=0)
 
 
-def _put_text(img, text, pos, scale=FONT_SIZE / 32, thickness=1, color=(255, 255, 0), console=False):
+def _put_text(img, text, pos, scale=FONT_SIZE / 32, thickness=1, color=(255, 255, 0), bg_color=None, bold=False):
     # TODO: figure out how exactly opencv anchors the text
     pos = (pos[0] + FONT_SIZE // 2, pos[1] + FONT_SIZE // 2 + 8)
 
     font = cv2.FONT_HERSHEY_PLAIN  # Monospaced font
     scale *= 2  # Adjust scale for better visibility in console
 
-    return cv2.putText(img, text, pos, font, scale, color, thickness, cv2.LINE_AA)
+    if bg_color is not None:
+        (text_width, text_height), baseline = cv2.getTextSize(text, font, scale, thickness)
+        # Calculate the rectangle's position
+        rect_pos = (pos[0], pos[1] - text_height - baseline)
+        rect_end = (pos[0] + text_width, pos[1] + baseline)
+
+        # Draw the background rectangle
+        cv2.rectangle(img, rect_pos, rect_end, bg_color, -1)
+
+    # Function to draw text
+    def draw_text(offset_x=0, offset_y=0):
+        text_pos = (int(pos[0] + offset_x), int(pos[1] + offset_y))
+        cv2.putText(img, text, text_pos, font, scale, color, thickness, cv2.LINE_AA)
+
+    if bold:
+        # Draw the text multiple times with small offsets to create a bold effect
+        for offset_x in range(-1, 2):
+            for offset_y in range(-1, 2):
+                draw_text(offset_x, offset_y)
+    else:
+        # Draw the text once for normal weight
+        draw_text()
+
+    return img
+
+
+def _put_tile(img, tile, pos):
+    x, y, z = tile.shape
+    img[pos[1] : pos[1] + y, pos[0] : pos[0] + x] = tile
 
 
 def _draw_frame(img, color=(90, 90, 90), thickness=3):
@@ -196,6 +226,8 @@ class RenderTiles(gym.Wrapper):
         topbar = self._draw_topbar(scene_vis.shape[1])
         bottombar = self._draw_bottombar(scene_vis.shape[1])
         rendered = np.concatenate([topbar, scene_vis, bottombar], axis=0)
+        inventory = self._draw_inventory(rendered.shape[0])
+        rendered = np.concatenate([rendered, inventory], axis=1)
         image = rendered[..., ::-1]
 
         ratio = 0.5
@@ -411,3 +443,57 @@ class RenderTiles(gym.Wrapper):
         if result is not None and result[1] == 1:
             result = (result[0], 0)  # e.g. for known items view
         return result, marker_type
+
+    def _draw_inventory(self, height):
+        width = 1000
+        ret = np.zeros((height, width, 3), dtype=np.uint8)
+
+        # get inventory
+        obs = self.env.unwrapped.last_observation
+        inv_glyphs = obs[self.env.unwrapped._observation_keys.index("inv_glyphs")]
+        inv_letters = obs[self.env.unwrapped._observation_keys.index("inv_letters")]
+        inv_oclasses = obs[self.env.unwrapped._observation_keys.index("inv_oclasses")]
+        inv_strs = obs[self.env.unwrapped._observation_keys.index("inv_strs")]
+
+        # don't show empty items
+        number_of_items = len([i for i in inv_glyphs if i != 5976])
+        inv_glyphs = inv_glyphs[:number_of_items]
+        inv_letters = inv_letters[:number_of_items]
+        inv_oclasses = inv_oclasses[:number_of_items]
+        inv_strs = inv_strs[:number_of_items]
+
+        inv_letters = list(map(chr, inv_letters))
+        inv_oclasses = [ItemClasses(o).name for o in inv_oclasses]
+        inv_strs = list(map(lambda x: "".join([chr(y) for y in x if y != 0]), inv_strs))
+
+        items = dict(
+            glyphs=inv_glyphs,
+            letters=inv_letters,
+            oclasses=inv_oclasses,
+            strs=inv_strs,
+        )
+        items = pd.DataFrame(items)
+        groups = {}
+        for name, group in items.groupby("oclasses"):
+            groups[name] = group
+
+        i = 0
+        for clas in ItemClasses:
+            if clas.name in groups:
+                txt = clas.name.capitalize()
+                _put_text(ret, txt, (0, i * FONT_SIZE), color=(0, 0, 0), bg_color=(255, 255, 255), bold=True)
+                i += 1
+
+                for item in groups[clas.name].iloc:
+                    txt = f"{item['letters']}) {item['strs']}"
+                    glyph = item["glyphs"]
+                    tiles_idx = self.glyph2tile[glyph]
+                    tiles = self.tileset[tiles_idx]
+                    _put_tile(ret, tiles, (16, i * FONT_SIZE))
+                    _put_text(ret, txt, (40, i * FONT_SIZE), color=(255, 255, 255))
+                    i += 1
+
+                i += 1
+
+        _draw_frame(ret)
+        return ret
