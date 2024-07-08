@@ -8,21 +8,22 @@ from multiprocessing import Pool
 import gym
 import numpy as np
 
-from demo.wrappers import EnvWrapper, NLEDemo, RenderTiles
+from demo.utils.wrappers import EnvWrapper, NLEDemo, RenderTiles, TaskRewardsInfoWrapper
 
 
 def worker(args):
     from_, to_, flags = args
-    orig_env = gym.make(
+    env = gym.make(
         flags.game,
         save_ttyrec_every=1,
         savedir=flags.savedir,
     )
-    orig_env = RenderTiles(orig_env, tileset_path="tilesets/3.6.1tiles32.png")
+    env = TaskRewardsInfoWrapper(env, done_only=False)
+    env = RenderTiles(env, tileset_path="tilesets/3.6.1tiles32.png")
 
     scores = []
     for i in range(from_, to_):
-        env = EnvWrapper(NLEDemo(orig_env, flags.gamesavedir))
+        env = EnvWrapper(NLEDemo(env, flags.gamesavedir))
         try:
             env.seed(i)
             env.main()
@@ -37,7 +38,7 @@ def worker(args):
         env.save_to_file()
 
         scores.append(env.score)
-    orig_env.close()
+    env.close()
     return scores
 
 

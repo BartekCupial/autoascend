@@ -1,19 +1,111 @@
 import re
-from collections import namedtuple
 
 import cv2
 import gym
 import numpy as np
+from nle import nethack
+from numba import njit
+from PIL import Image, ImageDraw, ImageFont
 
-BLStats = namedtuple(
-    "BLStats",
-    "x y strength_percentage strength dexterity constitution intelligence wisdom charisma score hitpoints max_hitpoints depth gold energy max_energy armor_class monster_level experience_level experience_points time hunger_state carrying_capacity dungeon_number level_number prop_mask align_bits",
-)
-
+from demo.utils.blstats import BLStats
+from demo.utils.level import Level
 
 HISTORY_SIZE = 13
 FONT_SIZE = 32
 RENDERS_HISTORY_SIZE = 128
+
+SMALL_FONT_PATH = "Hack-Regular.ttf"
+
+# Mapping of 0-15 colors used.
+# Taken from bottom image here. It seems about right
+# https://i.stack.imgur.com/UQVe5.png
+COLORS = [
+    "#000000",
+    "#800000",
+    "#008000",
+    "#808000",
+    "#000080",
+    "#800080",
+    "#008080",
+    "#808080",  # - flipped these ones around
+    "#C0C0C0",  # | the gray-out dull stuff
+    "#FF0000",
+    "#00FF00",
+    "#FFFF00",
+    "#0000FF",
+    "#FF00FF",
+    "#00FFFF",
+    "#FFFFFF",
+]
+
+
+@njit
+def _tile_characters_to_image(
+    out_image,
+    chars,
+    colors,
+    output_height_chars,
+    output_width_chars,
+    char_array,
+    offset_h,
+    offset_w,
+):
+    """
+    Build an image using cached images of characters in char_array to out_image
+    """
+    char_height = char_array.shape[3]
+    char_width = char_array.shape[4]
+    for h in range(output_height_chars):
+        h_char = h + offset_h
+        # Stuff outside boundaries is not visible, so
+        # just leave it black
+        if h_char < 0 or h_char >= chars.shape[0]:
+            continue
+        for w in range(output_width_chars):
+            w_char = w + offset_w
+            if w_char < 0 or w_char >= chars.shape[1]:
+                continue
+            char = chars[h_char, w_char]
+            color = colors[h_char, w_char]
+            h_pixel = h * char_height
+            w_pixel = w * char_width
+            out_image[:, h_pixel : h_pixel + char_height, w_pixel : w_pixel + char_width] = char_array[char, color]
+
+
+def _initialize_char_array(font_size, rescale_font_size):
+    """Draw all characters in PIL and cache them in numpy arrays
+    if rescale_font_size is given, assume it is (width, height)
+    Returns a np array of (num_chars, num_colors, char_height, char_width, 3)
+    """
+    font = ImageFont.truetype(SMALL_FONT_PATH, font_size)
+    dummy_text = "".join([(chr(i) if chr(i).isprintable() else " ") for i in range(256)])
+    bboxes = np.array([font.getbbox(char) for char in dummy_text])
+    image_width = bboxes[:, 2].max()
+    image_height = bboxes[:, 3].max()
+
+    char_width = rescale_font_size[0]
+    char_height = rescale_font_size[1]
+    char_array = np.zeros((256, 16, char_height, char_width, 3), dtype=np.uint8)
+
+    for color_index in range(16):
+        for char_index in range(256):
+            char = dummy_text[char_index]
+
+            image = Image.new("RGB", (image_width, image_height))
+            image_draw = ImageDraw.Draw(image)
+            image_draw.rectangle((0, 0, image_width, image_height), fill=(0, 0, 0))
+
+            _, _, width, height = font.getbbox(char)
+            x = (image_width - width) // 2
+            y = (image_height - height) // 2
+            image_draw.text((x, y), char, font=font, fill=COLORS[color_index])
+
+            arr = np.array(image).copy()
+            if rescale_font_size:
+                arr = cv2.resize(arr, rescale_font_size, interpolation=cv2.INTER_AREA)
+            char_array[char_index, color_index] = arr
+
+    return char_array
 
 
 def _draw_grid(imgs, ncol):
@@ -39,7 +131,7 @@ def _draw_frame(img, color=(90, 90, 90), thickness=3):
 
 
 class RenderTiles(gym.Wrapper):
-    def __init__(self, env: gym.Env, tileset_path, tile_size=32):
+    def __init__(self, env: gym.Env, tileset_path, tile_size=32, render_font_size=(12, 22)):
         super().__init__(env)
 
         self.tileset = cv2.imread(tileset_path)[..., ::-1]
@@ -71,23 +163,29 @@ class RenderTiles(gym.Wrapper):
 
         self._window_name = "NetHackVis"
 
+        self.render_char_array = _initialize_char_array(FONT_SIZE, render_font_size)
+        self.render_char_array = self.render_char_array.transpose(0, 1, 4, 2, 3)
+        self.render_char_array = np.ascontiguousarray(self.render_char_array)
+
     def reset(self, **kwargs):
         self.frames = []
+        self.last_info = None
         obs = self.env.reset(**kwargs)
         self.render()
         return obs
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
+        self.last_info = info
         self.render()
 
-        self.action_history.append(self.env.actions[action].name)
+        self.action_history.append(self.env.unwrapped.actions[action].name)
         self.update_message_and_popup_history()
 
         return obs, reward, done, info
 
     def render(self, **kwargs):
-        glyphs = self.env.last_observation[self.env.unwrapped._glyph_index]
+        glyphs = self.env.unwrapped.last_observation[self.env.unwrapped._glyph_index]
 
         tiles_idx = self.glyph2tile[glyphs]
         tiles = self.tileset[tiles_idx.reshape(-1)]
@@ -108,35 +206,53 @@ class RenderTiles(gym.Wrapper):
         cv2.waitKey(1)
 
     def _draw_bottombar(self, width):
-        tty_chars = self.env.last_observation[self.env._observation_keys.index("tty_chars")]
+        obs = self.unwrapped.last_observation
+        tty_chars = obs[self.unwrapped._observation_keys.index("tty_chars")]
+        tty_colors = obs[self.unwrapped._observation_keys.index("tty_colors")]
 
         height = FONT_SIZE * len(tty_chars)
-        tty = self._draw_tty(tty_chars, width - width // 2, height)
+        tty = self._draw_tty(tty_chars, tty_colors, width - width // 2, height)
         stats = self._draw_stats(width // 2, height)
         return np.concatenate([tty, stats], axis=1)
 
-    def _draw_tty(self, tty_chars, width, height):
-        vis = np.zeros((height, width, 3)).astype(np.uint8)
-        for i, line in enumerate(tty_chars):
-            txt = "".join([chr(i) for i in line])
-            _put_text(vis, txt, (0, i * FONT_SIZE), console=True)
-        _draw_frame(vis)
-        return vis
+    def _draw_tty(self, tty_chars, tty_colors, width, height):
+        chw_image_shape = (
+            3,
+            nethack.nethack.TERMINAL_SHAPE[0] * self.render_char_array.shape[3],
+            nethack.nethack.TERMINAL_SHAPE[1] * self.render_char_array.shape[4],
+        )
+        out_image = np.zeros(chw_image_shape, dtype=np.uint8)
+
+        _tile_characters_to_image(
+            out_image=out_image,
+            chars=tty_chars,
+            colors=tty_colors,
+            output_height_chars=nethack.nethack.TERMINAL_SHAPE[0],
+            output_width_chars=nethack.nethack.TERMINAL_SHAPE[1],
+            char_array=self.render_char_array,
+            offset_h=0,
+            offset_w=0,
+        )
+
+        tty_image = out_image.transpose(1, 2, 0)
+        tty = cv2.resize(tty_image, (width, height), interpolation=cv2.INTER_AREA)
+        return tty
 
     def _draw_stats(self, width, height):
         ret = np.zeros((height, width, 3), dtype=np.uint8)
-        blstats = BLStats(*self.env.last_observation[self.env.unwrapped._blstats_index])
+        blstats = BLStats(*self.env.unwrapped.last_observation[self.env.unwrapped._blstats_index])
 
         # game info
         i = 0
         txt = [
-            f"Dlvl: {blstats.level_number}",
-            f"Step: {len(self.action_history)}",
-            f"Turn: {blstats.time}",
-            f"Score: {blstats.score}",
+            f"Score:{blstats.score}",
+            f"Step:{len(self.action_history)}",
+            f"Turn:{blstats.time}",
+            f"Dlvl:{blstats.level_number}",
+            f"{' '.join(map(lambda x: x.capitalize(), Level(blstats.dungeon_number).name.split('_')))}",
         ]
-        _put_text(ret, " | ".join(txt), (0, i * FONT_SIZE), color=(255, 255, 255))
-        i += 3
+        _put_text(ret, " ".join(txt), (0, i * FONT_SIZE), color=(255, 255, 255))
+        i += 1
 
         # general character info
         txt = [
@@ -147,19 +263,27 @@ class RenderTiles(gym.Wrapper):
             f"Wi:{blstats.wisdom}",
             f"Ch:{blstats.charisma}",
         ]
-        _put_text(ret, " | ".join(txt), (0, i * FONT_SIZE))
+        _put_text(ret, " ".join(txt), (0, i * FONT_SIZE))
         i += 1
         txt = [
-            f"HP: {blstats.hitpoints} / {blstats.max_hitpoints}",
-            f"LVL: {blstats.experience_level}",
-            f"ENERGY: {blstats.energy} / {blstats.max_energy}",
+            f"HP:{blstats.hitpoints}({blstats.max_hitpoints})",
+            f"Pw:{blstats.energy}({blstats.max_energy})",
+            f"AC:{blstats.armor_class}",
+            f"Xp:{blstats.experience_level}/{blstats.experience_points}",
         ]
         hp_ratio = blstats.hitpoints / blstats.max_hitpoints
         hp_color = cv2.applyColorMap(np.array([[130 - int((1 - hp_ratio) * 110)]], dtype=np.uint8), cv2.COLORMAP_TURBO)[
             0, 0
         ]
-        _put_text(ret, " | ".join(txt), (0, i * FONT_SIZE), color=tuple(map(int, hp_color)))
+        _put_text(ret, " ".join(txt), (0, i * FONT_SIZE), color=tuple(map(int, hp_color)))
         i += 2
+
+        # extra stats info
+        if self.last_info is not None:
+            for k, v in self.last_info["episode_extra_stats"].items():
+                txt = f"{' '.join(map(lambda x: x.capitalize(), k.split('_')))}: {v}"
+                _put_text(ret, txt, (0, i * FONT_SIZE), color=(255, 255, 255))
+                i += 1
 
         _draw_frame(ret)
         return ret
@@ -213,7 +337,7 @@ class RenderTiles(gym.Wrapper):
 
     def update_message_and_popup_history(self):
         """Uses MORE action to get full popup and/or message."""
-        message = self.env.last_observation[self.env.unwrapped._message_index]
+        message = self.env.unwrapped.last_observation[self.env.unwrapped._message_index]
         message = bytes(message).decode().replace("\0", " ").replace("\n", "").strip()
         if message.endswith("--More--"):
             # FIXME: It seems like in this case the environment doesn't expect additional input,
@@ -224,7 +348,7 @@ class RenderTiles(gym.Wrapper):
         assert "\n" not in message and "\r" not in message
         popup = []
 
-        tty_chars = self.env.last_observation[self.env._observation_keys.index("tty_chars")]
+        tty_chars = self.env.unwrapped.last_observation[self.env.unwrapped._observation_keys.index("tty_chars")]
         lines = [bytes(line).decode().replace("\0", " ").replace("\n", "") for line in tty_chars]
         marker_pos, marker_type = self._find_marker(lines)
 

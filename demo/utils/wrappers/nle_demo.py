@@ -14,7 +14,7 @@ class NLEDemo(gym.Wrapper):
         super().__init__(env)
         self.save_every_k = 100
         self.gamesavedir = gamesavedir
-        self.savedir = Path(gamesavedir) / Path(self.env.nethack._ttyrec).stem
+        self.savedir = Path(gamesavedir) / Path(self.env.unwrapped.nethack._ttyrec).stem
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
@@ -38,7 +38,7 @@ class NLEDemo(gym.Wrapper):
         self.checkpoints = []
         self.checkpoint_action_nr = []
         self.rewards = []
-        self.seeds = self.env.get_seeds()
+        self.seeds = self.env.unwrapped.get_seeds()
         return obs
 
     def save_to_file(self):
@@ -97,6 +97,6 @@ class NLEDemo(gym.Wrapper):
     def save_checkpoint(self):
         i = len(self.recorded_actions)
         chk_pth = self.savedir / f"ckpt_{i}"
-        self.env.save(gamesavedir=chk_pth)
+        self.env.unwrapped.save(gamesavedir=chk_pth)
         self.checkpoints.append(chk_pth)
         self.checkpoint_action_nr.append(len(self.recorded_actions))

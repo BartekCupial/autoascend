@@ -113,7 +113,7 @@ class StaircasePetScore(Score):
         return reward
 
 
-class SokobanFillPitScore(Score):
+class SokobanfillpitScore(Score):
     """
     This task requires the agent to put the boulders inside wholes for sokoban.
     We count each successful boulder moved into a whole as a total reward.
@@ -135,7 +135,7 @@ class SokobanFillPitScore(Score):
         return reward
 
 
-class SokobanSolvedLevelsScore(Score):
+class SokobansolvedlevelsScore(Score):
     def __init__(self):
         super().__init__()
         self.sokoban_levels = {}
