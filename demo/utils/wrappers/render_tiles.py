@@ -1,4 +1,6 @@
 import re
+import time
+from pathlib import Path
 
 import cv2
 import gym
@@ -161,8 +163,10 @@ def _draw_frame(img, color=(90, 90, 90), thickness=3):
 
 
 class RenderTiles(gym.Wrapper):
-    def __init__(self, env: gym.Env, tileset_path, tile_size=32, render_font_size=(12, 22)):
+    def __init__(self, env: gym.Env, tileset_path, output_path, tile_size=32, render_font_size=(12, 22)):
         super().__init__(env)
+
+        self.output_path = output_path
 
         self.tileset = cv2.imread(tileset_path)[..., ::-1]
         if self.tileset is None:
@@ -183,22 +187,29 @@ class RenderTiles(gym.Wrapper):
 
         self.glyph2tile = np.array(glyph2tile)
 
-        self.frames = []
-        # self.output_path = output_path
         self.video_writer = None
 
         self.action_history = list()
         self.message_history = list()
         self.popup_history = list()
 
-        self._window_name = "NetHackVis"
+        self._window_name = "NetHack"
 
         self.render_char_array = _initialize_char_array(FONT_SIZE, render_font_size)
         self.render_char_array = self.render_char_array.transpose(0, 1, 4, 2, 3)
         self.render_char_array = np.ascontiguousarray(self.render_char_array)
 
     def reset(self, **kwargs):
-        self.frames = []
+        self.start_time = time.time()
+
+        if self.video_writer is not None:
+            self.video_writer.release()
+            cv2.destroyAllWindows()
+
+        self.output_path = str(Path(self.output_path) / f"{Path(self.env.unwrapped.nethack._ttyrec).stem}.mp4")
+        self.fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # or use 'XVID' for .avi format
+        self.video_writer = cv2.VideoWriter(self.output_path, self.fourcc, 30.0, (1920, 1080))
+
         self.last_info = None
         obs = self.env.reset(**kwargs)
         self.render()
@@ -220,22 +231,22 @@ class RenderTiles(gym.Wrapper):
         tiles_idx = self.glyph2tile[glyphs]
         tiles = self.tileset[tiles_idx.reshape(-1)]
         scene_vis = _draw_grid(tiles, glyphs.shape[1])
-
-        self.frames.append(scene_vis)
-
         topbar = self._draw_topbar(scene_vis.shape[1])
         bottombar = self._draw_bottombar(scene_vis.shape[1])
         rendered = np.concatenate([topbar, scene_vis, bottombar], axis=0)
+
         inventory = self._draw_inventory(rendered.shape[0])
         rendered = np.concatenate([rendered, inventory], axis=1)
+
         image = rendered[..., ::-1]
+        resized_image = cv2.resize(image, (1920, 1080), cv2.INTER_AREA)
+        self.video_writer.write(resized_image)
 
-        ratio = 0.5
-        width, height = round(image.shape[1] * ratio), round(image.shape[0] * ratio)
+        # if len(self.action_history) % 100 == 0:
+        #     print(f"SPS: {(len(self.action_history) + 1) / (time.time() - self.start_time)}")
 
-        resized_image = cv2.resize(image, (width, height), cv2.INTER_AREA)
-        cv2.imshow(self._window_name, resized_image)
-        cv2.waitKey(1)
+        # cv2.imshow(self._window_name, resized_image)
+        # cv2.waitKey(1)
 
     def _draw_bottombar(self, width):
         obs = self.unwrapped.last_observation

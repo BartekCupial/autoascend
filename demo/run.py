@@ -19,7 +19,7 @@ def worker(args):
         savedir=flags.savedir,
     )
     env = TaskRewardsInfoWrapper(env, done_only=False)
-    env = RenderTiles(env, tileset_path="tilesets/3.6.1tiles32.png")
+    env = RenderTiles(env, tileset_path="tilesets/3.6.1tiles32.png", output_path=flags.gamesavedir)
 
     scores = []
     for i in range(from_, to_):
