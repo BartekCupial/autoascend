@@ -70,6 +70,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_demo", type=ast.literal_eval, default=False)
     parser.add_argument("--save_video", type=ast.literal_eval, default=False)
     flags = parser.parse_args()
+    print(flags)
 
     start_time = time.time()
 
