@@ -211,13 +211,13 @@ class RenderTiles(gym.Wrapper):
 
         if self.video_writer is not None:
             self.video_writer.release()
-            cv2.destroyAllWindows()
+
+        obs = self.env.reset(**kwargs)
 
         self.output_path = str(Path(self.output_path) / f"{Path(self.env.unwrapped.nethack._ttyrec).stem}.mp4")
         self.fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # or use 'XVID' for .avi format
         self.video_writer = cv2.VideoWriter(self.output_path, self.fourcc, 30.0, (1920, 1080))
 
-        obs = self.env.reset(**kwargs)
         self.render()
         return obs
 
@@ -229,6 +229,12 @@ class RenderTiles(gym.Wrapper):
         self.update_message_and_popup_history()
 
         return obs, reward, done, info
+
+    def close(self):
+        if self.video_writer is not None:
+            self.video_writer.release()
+            cv2.destroyAllWindows()
+        return self.env.close()
 
     def render(self, **kwargs):
         glyphs = self.env.unwrapped.last_observation[self.env.unwrapped._glyph_index]

@@ -11,7 +11,15 @@ import numpy as np
 import pandas as pd
 
 from demo.utils.collections import concat_dicts
-from demo.utils.wrappers import EnvWrapper, FinalStatsWrapper, LastInfo, NLEDemo, RenderTiles, TaskRewardsInfoWrapper
+from demo.utils.wrappers import (
+    EnvWrapper,
+    FinalStatsWrapper,
+    LastInfo,
+    NLEDemo,
+    RenderTiles,
+    TaskRewardsInfoWrapper,
+    TtyrecInfoWrapper,
+)
 
 
 def worker(args):
@@ -23,6 +31,7 @@ def worker(args):
     )
     orig_env = TaskRewardsInfoWrapper(orig_env, done_only=False)
     orig_env = FinalStatsWrapper(orig_env, done_only=False)
+    orig_env = TtyrecInfoWrapper(orig_env, done_only=False)
     orig_env = LastInfo(orig_env)
     if flags.save_video:
         orig_env = RenderTiles(orig_env, output_path=flags.gamesavedir)
