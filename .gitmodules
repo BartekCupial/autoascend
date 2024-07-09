@@ -1,0 +1,3 @@
+[submodule "nle_utils"]
+	path = nle_utils
+	url = https://github.com/BartekCupial/nle-utils.git
