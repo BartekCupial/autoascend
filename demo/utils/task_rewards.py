@@ -3,7 +3,7 @@ import re
 import numpy as np
 from nle import nethack
 
-from heur.glyph import SS, G
+from demo.utils.glyph import SS, G
 
 
 class Score:
@@ -113,7 +113,7 @@ class StaircasePetScore(Score):
         return reward
 
 
-class SokobanfillpitScore(Score):
+class SokobanFillPitScore(Score):
     """
     This task requires the agent to put the boulders inside wholes for sokoban.
     We count each successful boulder moved into a whole as a total reward.
@@ -135,7 +135,7 @@ class SokobanfillpitScore(Score):
         return reward
 
 
-class SokobansolvedlevelsScore(Score):
+class SokobanSolvedLevelsScore(Score):
     def __init__(self):
         super().__init__()
         self.sokoban_levels = {}

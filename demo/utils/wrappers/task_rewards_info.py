@@ -1,6 +1,6 @@
 import gym
 
-from heur.task_rewards import (
+from demo.utils.task_rewards import (
     EatingScore,
     GoldScore,
     ScoutScore,

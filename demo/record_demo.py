@@ -14,8 +14,7 @@ import gym
 import nle  # noqa: F401
 from nle import nethack
 
-from demo.utils.wrappers import EnvWrapper, NLEDemo
-from heur.task_rewards_info import TaskRewardsInfoWrapper
+from demo.utils.wrappers import EnvWrapper, NLEDemo, TaskRewardsInfoWrapper
 
 
 @contextlib.contextmanager
