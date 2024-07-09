@@ -166,14 +166,14 @@ class RenderTiles(gym.Wrapper):
     def __init__(
         self,
         env: gym.Env,
-        output_path,
+        output_dir,
         tileset_path="tilesets/3.6.1tiles32.png",
         tile_size=32,
         render_font_size=(12, 22),
     ):
         super().__init__(env)
 
-        self.output_path = output_path
+        self.output_dir = output_dir
 
         self.tileset = cv2.imread(tileset_path)[..., ::-1]
         if self.tileset is None:
@@ -195,6 +195,7 @@ class RenderTiles(gym.Wrapper):
         self.glyph2tile = np.array(glyph2tile)
 
         self.video_writer = None
+        self.fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # or use 'XVID' for .avi format
 
         self.action_history = list()
         self.message_history = list()
@@ -214,9 +215,9 @@ class RenderTiles(gym.Wrapper):
 
         obs = self.env.reset(**kwargs)
 
-        self.output_path = str(Path(self.output_path) / f"{Path(self.env.unwrapped.nethack._ttyrec).stem}.mp4")
-        self.fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # or use 'XVID' for .avi format
-        self.video_writer = cv2.VideoWriter(self.output_path, self.fourcc, 30.0, (1920, 1080))
+        self.output_path = Path(self.output_dir) / f"{Path(self.env.unwrapped.nethack._ttyrec).stem}.mp4"
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.video_writer = cv2.VideoWriter(str(self.output_path), self.fourcc, 30.0, (1920, 1080))
 
         self.render()
         return obs

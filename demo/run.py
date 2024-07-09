@@ -34,7 +34,7 @@ def worker(args):
     orig_env = TtyrecInfoWrapper(orig_env, done_only=False)
     orig_env = LastInfo(orig_env)
     if flags.save_video:
-        orig_env = RenderTiles(orig_env, output_path=flags.gamesavedir)
+        orig_env = RenderTiles(orig_env, output_dir=flags.gamesavedir)
     if flags.save_demo:
         orig_env = NLEDemo(orig_env, flags.gamesavedir)
 
