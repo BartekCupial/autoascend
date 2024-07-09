@@ -1,4 +1,5 @@
 import gym
+from nle import nethack
 
 from demo.utils.blstats import BLStats
 
@@ -11,9 +12,14 @@ class FinalStatsWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         self.step_num = 0
         self.max_dlvl = 1
-        self.visited_sokoban = False
-        self.sokoban_entry = None
-        self.previous_dlvl = 1
+        self.current_dlvl = 1
+        self.previous_dlvl = (0, 0)
+        self.reached_levels = dict()
+        self.reached_levels[(0, 0)] = dict(
+            previous_level=self.previous_dlvl,
+            dlvl=0,
+        )
+
         return self.env.reset(**kwargs)
 
     def step(self, action):
@@ -32,22 +38,17 @@ class FinalStatsWrapper(gym.Wrapper):
 
         blstats = BLStats(*observation[self.env.unwrapped._blstats_index])
 
-        # in sokoban we have to calculate max dlvl differently
-        if blstats.dungeon_number == 4:
-            # if first time in Sokoban
-            if not self.visited_sokoban:
-                self.sokoban_entry = self.previous_dlvl
-                self.visited_sokoban = True
+        dungeon_num = blstats[nethack.NLE_BL_DNUM]
+        dungeon_level = blstats[nethack.NLE_BL_DLEVEL]
+        key = (dungeon_num.item(), dungeon_level.item())
 
-            # if first soko level 5 - 4 = +1
-            # if last soko level 5 - 1 = +4
-            self.sokoban_level_number = self.sokoban_entry + (5 - blstats.level_number)
-
-            self.max_dlvl = max(self.max_dlvl, self.sokoban_level_number)
-        else:
-            self.max_dlvl = max(self.max_dlvl, blstats.level_number)
-
-        self.previous_dlvl = blstats.level_number
+        if key not in self.reached_levels:
+            self.reached_levels[key] = dict(
+                previous_level=self.previous_dlvl, dlvl=self.reached_levels[self.previous_dlvl]["dlvl"] + 1
+            )
+        self.previous_dlvl = key
+        self.current_dlvl = self.reached_levels[key]["dlvl"]
+        self.max_dlvl = max(self.max_dlvl, self.current_dlvl)
 
         blstats = blstats._asdict()
         include = [
@@ -69,4 +70,10 @@ class FinalStatsWrapper(gym.Wrapper):
         ]
         blstats_info = dict(filter(lambda item: item[0] in include, blstats.items()))
 
-        return {**extra_stats, **blstats_info, "step": self.step_num, "max_dlvl": self.max_dlvl}
+        return {
+            **extra_stats,
+            **blstats_info,
+            "step": self.step_num,
+            "max_dlvl": self.max_dlvl,
+            "dlvl": self.current_dlvl,
+        }
