@@ -326,11 +326,7 @@ class RenderTiles(gym.Wrapper):
             f"AC:{blstats.armor_class}",
             f"Xp:{blstats.experience_level}/{blstats.experience_points}",
         ]
-        hp_ratio = blstats.hitpoints / blstats.max_hitpoints
-        hp_color = cv2.applyColorMap(np.array([[130 - int((1 - hp_ratio) * 110)]], dtype=np.uint8), cv2.COLORMAP_TURBO)[
-            0, 0
-        ]
-        _put_text(ret, " ".join(txt), (0, i * FONT_SIZE), color=tuple(map(int, hp_color)))
+        _put_text(ret, " ".join(txt), (0, i * FONT_SIZE), color=(255, 255, 255))
         i += 2
 
         # extra stats info
