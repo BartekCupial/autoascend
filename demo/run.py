@@ -1,29 +1,37 @@
 import argparse
-import os
+import ast
 import sys
 import time
 import traceback
 from multiprocessing import Pool
+from pathlib import Path
 
 import gym
 import numpy as np
+import pandas as pd
 
-from demo.utils.wrappers import EnvWrapper, NLEDemo, RenderTiles, TaskRewardsInfoWrapper
+from demo.utils.collections import concat_dicts
+from demo.utils.wrappers import EnvWrapper, FinalStatsWrapper, LastInfo, NLEDemo, RenderTiles, TaskRewardsInfoWrapper
 
 
 def worker(args):
     from_, to_, flags = args
-    env = gym.make(
+    orig_env = gym.make(
         flags.game,
         save_ttyrec_every=1,
         savedir=flags.savedir,
     )
-    env = TaskRewardsInfoWrapper(env, done_only=False)
-    env = RenderTiles(env, tileset_path="tilesets/3.6.1tiles32.png", output_path=flags.gamesavedir)
+    orig_env = TaskRewardsInfoWrapper(orig_env, done_only=False)
+    orig_env = FinalStatsWrapper(orig_env, done_only=False)
+    orig_env = LastInfo(orig_env)
+    if flags.save_video:
+        orig_env = RenderTiles(orig_env, output_path=flags.gamesavedir)
+    if flags.save_demo:
+        orig_env = NLEDemo(orig_env, flags.gamesavedir)
 
-    scores = []
+    data = []
     for i in range(from_, to_):
-        env = EnvWrapper(NLEDemo(env, flags.gamesavedir))
+        env = EnvWrapper(orig_env)
         try:
             env.seed(i)
             env.main()
@@ -35,11 +43,12 @@ def worker(args):
 
         print(f"Run {i} finished with score {env.score}", file=sys.stderr)
 
-        env.save_to_file()
+        if flags.save_demo:
+            env.save_to_file()
 
-        scores.append(env.score)
+        data.append(env.last_info.get("episode_extra_stats", {}))
     env.close()
-    return scores
+    return data
 
 
 if __name__ == "__main__":
@@ -49,12 +58,14 @@ if __name__ == "__main__":
     parser.add_argument("--savedir", type=str)
     parser.add_argument("--game", type=str)
     parser.add_argument("--gamesavedir", type=str)
+    parser.add_argument("--save_demo", type=ast.literal_eval, default=False)
+    parser.add_argument("--save_video", type=ast.literal_eval, default=False)
     flags = parser.parse_args()
 
     start_time = time.time()
 
     with Pool(flags.num_threads) as pool:
-        scores = list(
+        data = list(
             pool.map(
                 worker,
                 [
@@ -67,10 +78,13 @@ if __name__ == "__main__":
                 ],
             )
         )
-    scores = [s for ss in scores for s in ss]
+    data = [s for ss in data for s in ss]
+    df = pd.DataFrame(concat_dicts(data))
+    agg = df.agg(["mean", "max", "median"])
+    df.to_csv(Path(flags.gamesavedir) / "stats.csv")
 
-    print("scores  :", scores, file=sys.stderr)
+    print("scores  :", list(df["score"]), file=sys.stderr)
     print("duration:", time.time() - start_time, file=sys.stderr)
-    print("len     :", len(scores), file=sys.stderr)
-    print("median  :", np.median(scores), file=sys.stderr)
-    print("mean    :", np.mean(scores), file=sys.stderr)
+    print("len     :", len(df), file=sys.stderr)
+    print("median  :", agg["score"].loc["median"], file=sys.stderr)
+    print("mean    :", agg["score"].loc["mean"], file=sys.stderr)

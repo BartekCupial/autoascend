@@ -1,15 +1,21 @@
+import gym
+
 from demo.utils.blstats import BLStats
-from demo.utils.wrappers.info_wrapper import InfoWrapper
 
 
-class BlstatsInfoWrapper(InfoWrapper):
+class BlstatsInfoWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env, done_only=True):
+        super().__init__(env)
+        self.done_only = done_only
+
     def step(self, action):
         # because we will see done=True at the first timestep of the new episode
         # to properly calculate blstats at the end of the episode we need to keep the last_observation around
         last_observation = tuple(a.copy() for a in self.env.unwrapped.last_observation)
         obs, reward, done, info = self.env.step(action)
 
-        self.add_more_stats(info, last_observation, done)
+        if done or not self.done_only:
+            info["episode_extra_stats"] = self.episode_extra_stats(info, last_observation)
 
         return obs, reward, done, info
 

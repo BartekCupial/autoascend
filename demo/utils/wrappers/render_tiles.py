@@ -163,7 +163,14 @@ def _draw_frame(img, color=(90, 90, 90), thickness=3):
 
 
 class RenderTiles(gym.Wrapper):
-    def __init__(self, env: gym.Env, tileset_path, output_path, tile_size=32, render_font_size=(12, 22)):
+    def __init__(
+        self,
+        env: gym.Env,
+        output_path,
+        tileset_path="tilesets/3.6.1tiles32.png",
+        tile_size=32,
+        render_font_size=(12, 22),
+    ):
         super().__init__(env)
 
         self.output_path = output_path
@@ -210,14 +217,12 @@ class RenderTiles(gym.Wrapper):
         self.fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # or use 'XVID' for .avi format
         self.video_writer = cv2.VideoWriter(self.output_path, self.fourcc, 30.0, (1920, 1080))
 
-        self.last_info = None
         obs = self.env.reset(**kwargs)
         self.render()
         return obs
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
-        self.last_info = info
         self.render()
 
         self.action_history.append(self.env.unwrapped.actions[action].name)
