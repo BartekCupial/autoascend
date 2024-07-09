@@ -401,7 +401,7 @@ class Agent:
         self.step_count += 1
         self.score += reward
 
-        self.cursor_pos = (observation["tty_cursor"][0] - 1, observation["tty_cursor"][1])
+        self.cursor_pos = (int(observation["tty_cursor"][0]) - 1, observation["tty_cursor"][1])
 
         if hasattr(self, "blstats"):
             for item in flatten_items(self.inventory.items):
