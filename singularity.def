@@ -55,6 +55,9 @@ From: nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
     pip install nle-language-wrapper jsonline
 
+    # install nle utils
+    cd nle_utils && pip install -e . && cd ..
+
     # Test NLE.
     python -c 'import gym; import nle; env = gym.make("NetHackScore-v0"); env.reset()'
 
