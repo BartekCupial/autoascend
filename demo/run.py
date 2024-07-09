@@ -9,10 +9,8 @@ from pathlib import Path
 import gym
 import numpy as np
 import pandas as pd
-
-from demo.utils.collections import concat_dicts
-from demo.utils.wrappers import (
-    EnvWrapper,
+from nle_utils.collections import concat_dicts
+from nle_utils.wrappers import (
     FinalStatsWrapper,
     LastInfo,
     NLEDemo,
@@ -20,6 +18,8 @@ from demo.utils.wrappers import (
     TaskRewardsInfoWrapper,
     TtyrecInfoWrapper,
 )
+
+from heur.run import EnvWrapper
 
 
 def worker(args):
@@ -42,7 +42,7 @@ def worker(args):
     for i in range(from_, to_):
         env = EnvWrapper(orig_env)
         try:
-            env.seed(i)
+            orig_env.seed(i)
             env.main()
         except BaseException as e:
             print(
@@ -53,10 +53,10 @@ def worker(args):
         print(f"Run {i} finished with score {env.score}", file=sys.stderr)
 
         if flags.save_demo:
-            env.save_to_file()
+            orig_env.save_to_file()
 
-        data.append(env.last_info.get("episode_extra_stats", {}))
-    env.close()
+        data.append(orig_env.last_info.get("episode_extra_stats", {}))
+    orig_env.close()
     return data
 
 

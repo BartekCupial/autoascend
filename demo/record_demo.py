@@ -13,8 +13,7 @@ import tty
 import gym
 import nle  # noqa: F401
 from nle import nethack
-
-from demo.utils.wrappers import EnvWrapper, NLEDemo, TaskRewardsInfoWrapper
+from nle_utils.wrappers import NLEDemo, TaskRewardsInfoWrapper
 
 
 @contextlib.contextmanager
