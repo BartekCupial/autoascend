@@ -9,6 +9,8 @@ from pathlib import Path
 import gym
 import numpy as np
 import pandas as pd
+
+from heur.run import EnvWrapper
 from nle_utils.collections import concat_dicts
 from nle_utils.wrappers import (
     FinalStatsWrapper,
@@ -18,8 +20,6 @@ from nle_utils.wrappers import (
     TaskRewardsInfoWrapper,
     TtyrecInfoWrapper,
 )
-
-from heur.run import EnvWrapper
 
 
 def worker(args):
@@ -89,11 +89,12 @@ if __name__ == "__main__":
         )
     data = [s for ss in data for s in ss]
     df = pd.DataFrame(concat_dicts(data))
-    agg = df.agg(["mean", "max", "median"])
     df.to_csv(Path(flags.gamesavedir) / "stats.csv")
+    scores = df["score"]
+    agg = scores.agg(["mean", "max", "median"])
 
-    print("scores  :", list(df["score"]), file=sys.stderr)
+    print("scores  :", list(scores), file=sys.stderr)
     print("duration:", time.time() - start_time, file=sys.stderr)
     print("len     :", len(df), file=sys.stderr)
-    print("median  :", agg["score"].loc["median"], file=sys.stderr)
-    print("mean    :", agg["score"].loc["mean"], file=sys.stderr)
+    print("median  :", agg.loc["median"], file=sys.stderr)
+    print("mean    :", agg.loc["mean"], file=sys.stderr)
