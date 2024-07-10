@@ -92,7 +92,9 @@ if __name__ == "__main__":
         )
     data = [s for ss in data for s in ss]
     df = pd.DataFrame(concat_dicts(data))
-    df.to_csv(Path(flags.gamesavedir) / "stats.csv")
+    csv_output_path = Path(flags.gamesavedir) / "stats.csv"
+    csv_output_path.parent.mkdir(exist_ok=True, parents=True)
+    df.to_csv(csv_output_path)
     scores = df["score"]
     agg = scores.agg(["mean", "max", "median"])
 
