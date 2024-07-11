@@ -12,6 +12,7 @@ import pandas as pd
 
 from heur.run import EnvWrapper
 from nle_utils.collections import concat_dicts
+from nle_utils.utils import str2bool
 from nle_utils.wrappers import (
     FinalStatsWrapper,
     LastInfo,
@@ -69,7 +70,7 @@ if __name__ == "__main__":
     parser.add_argument("--game", type=str)
     parser.add_argument("--gamesavedir", type=str)
     parser.add_argument("--experiment_id", type=int, default=0)
-    parser.add_argument("--seed", type=ast.literal_eval, default=True)
+    parser.add_argument("--seed", type=str2bool, default=True)
     parser.add_argument("--save_demo", type=ast.literal_eval, default=False)
     parser.add_argument("--save_video", type=ast.literal_eval, default=False)
     flags = parser.parse_args()
