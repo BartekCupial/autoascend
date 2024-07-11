@@ -68,6 +68,7 @@ if __name__ == "__main__":
     parser.add_argument("--savedir", type=str)
     parser.add_argument("--game", type=str)
     parser.add_argument("--gamesavedir", type=str)
+    parser.add_argument("--experiment_id", type=int, default=0)
     parser.add_argument("--seed", type=ast.literal_eval, default=True)
     parser.add_argument("--save_demo", type=ast.literal_eval, default=False)
     parser.add_argument("--save_video", type=ast.literal_eval, default=False)

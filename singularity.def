@@ -41,6 +41,7 @@ From: nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
     pip install opencv-python toolz pyinstrument seaborn numba scipy
     pip install aicrowd-gym nltk
+    pip install gymnasium
     
     # install NLE
     git clone https://github.com/BartekCupial/nle.git nle && cd nle \
@@ -57,6 +58,9 @@ From: nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
     # install nle utils
     cd nle_utils && pip install -e . && cd ..
+
+    # install mrunner
+    pip install git+https://gitlab.com/awarelab/mrunner.git
 
     # Test NLE.
     python -c 'import gym; import nle; env = gym.make("NetHackScore-v0"); env.reset()'

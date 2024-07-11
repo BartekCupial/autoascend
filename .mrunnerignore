@@ -1,8 +1,12 @@
-nle_data
-text_data
-saves
-processed_data
-data
+# Folders not needed for experiments
+docs/
+tests/
+mrunner_exps/
+nle/
+nle_env/
+notebooks/
+data/
+nle_data/
 *.sif
 
 # Byte-compiled / optimized / DLL files
@@ -118,33 +122,3 @@ trained_policies/**
 .vis/
 wandb/
 **/wandb/
-artifacts
-
-
-# idea
-.idea/**/workspace.xml
-.idea/**/tasks.xml
-.idea/**/usage.statistics.xml
-.idea/**/dictionaries
-.idea/**/shelf
-.idea/doom-rl.iml
-.idea/misc.xml
-.idea/modules.xml
-.idea
-
-# vscode
-.vscode
-
-.tmp
-
-# macOS
-.DS_Store
-
-
-# DMLab
-.dmlab_cache
-
-# vim
-*.swp
-*.swo
-*~
