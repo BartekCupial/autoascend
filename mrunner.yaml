@@ -8,8 +8,7 @@ contexts:
     nodes: 1
     ntasks: 1
     partition: standard
-    singularity_container: --nv --writable-tmpfs -H $PWD:/homeplaceholder  --env PYTHONPATH="$PWD/nle_utils:$PYTHONPATH" --env WANDBPWD=$PWD -B /mnt/storage_2/scratch/pl0334-01/tmpdir:/tmp -B /mnt:/mnt /mnt/storage_3/home/bartekcupial/pl0334-01/scratch/bartekcupial/aa3.sif
+    singularity_container: --nv --writable-tmpfs -H $PWD:/homeplaceholder --env PYTHONPATH="$PWD/nle_utils:$PYTHONPATH" --env WANDBPWD=$PWD -B /mnt/storage_2/scratch/pl0334-01/tmpdir:/tmp -B /mnt:/mnt /mnt/storage_3/home/bartekcupial/pl0334-01/scratch/bartekcupial/aa3.sif
     slurm_url: bartekcupial@eagle.man.poznan.pl
     storage_dir: /mnt/storage_3/home/bartekcupial/pl0334-01/scratch/bartekcupial
     time: 4320
-
