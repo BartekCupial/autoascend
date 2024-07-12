@@ -7,7 +7,7 @@ name = globals()["script"][:-3]
 # params for all exps
 config = {
     "num_assessments": 128,
-    "num_threads": 16,
+    "n_jobs": 16,
     "game": "NetHackChallenge-v0",
     "savedir": "data/nle_data",
     "gamesavedir": "data/demos",
@@ -22,7 +22,6 @@ params_grid = [
         "experiment_id": list(range(5)),
     }
 ]
-
 
 experiments_list = create_experiments_helper(
     experiment_name=name,

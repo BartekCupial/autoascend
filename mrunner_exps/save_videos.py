@@ -7,7 +7,7 @@ name = globals()["script"][:-3]
 # params for all exps
 config = {
     "num_assessments": 64,
-    "num_threads": 16,
+    "n_jobs": 16,
     "game": "NetHackChallenge-v0",
     "savedir": "data/nle_data",
     "gamesavedir": "data/demos",
