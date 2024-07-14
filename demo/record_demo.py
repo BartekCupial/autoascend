@@ -13,7 +13,9 @@ import tty
 import gym
 import nle  # noqa: F401
 from nle import nethack
-from nle_utils.wrappers import NLEDemo, TaskRewardsInfoWrapper
+
+from nle_utils.utils import str2bool
+from nle_utils.wrappers import FinalStatsWrapper, NLEDemo, TaskRewardsInfoWrapper, TtyrecInfoWrapper
 
 
 @contextlib.contextmanager
@@ -56,18 +58,20 @@ def get_action(env):
 
 
 def play():
-    orig_env = TaskRewardsInfoWrapper(
-        gym.make(
-            FLAGS.env,
-            save_ttyrec_every=1,
-            savedir=FLAGS.savedir,
-        )
+    orig_env = gym.make(
+        FLAGS.env,
+        character=FLAGS.character,
+        save_ttyrec_every=1,
+        savedir=FLAGS.savedir,
     )
-
+    orig_env = TaskRewardsInfoWrapper(orig_env, done_only=False)
+    orig_env = FinalStatsWrapper(orig_env, done_only=False)
+    orig_env = TtyrecInfoWrapper(orig_env, done_only=False)
     env = NLEDemo(orig_env, FLAGS.demodir)
 
     if FLAGS.demopath:
-        obs = env.load_from_file(FLAGS.demopath, FLAGS.demostep)
+        # obs = env.load_from_file(FLAGS.demopath, FLAGS.demostep)
+        obs = env.play_from_the_start(FLAGS.demopath)
     else:
         obs = env.reset()
 
@@ -157,6 +161,13 @@ def main():
         help="Gym environment spec. Defaults to 'NetHackStaircase-v0'.",
     )
     parser.add_argument(
+        "-c",
+        "--character",
+        type=str,
+        default="@",
+        help="Character you will be playing. Defaults to `@`.",
+    )
+    parser.add_argument(
         "-n",
         "--ngames",
         type=int,
@@ -175,6 +186,8 @@ def main():
         type=str,
         help="Directory path where data will be saved. " "Defaults to 'nle_data/play_data'.",
     )
+    parser.add_argument("--save_video", type=str2bool, default=False)
+    parser.add_argument("--show", type=str2bool, default=False)
     parser.add_argument(
         "--demodir",
         default="demo_data/play_data",
